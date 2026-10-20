@@ -614,6 +614,15 @@ class ReportSubmittedScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Report submitted'), automaticallyImplyLeading: false),
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 28), children: [
+        if (receipt.preview) ...[
+          const InfoBanner(
+            tone: BannerTone.warning,
+            icon: Icons.cloud_off_outlined,
+            title: 'Preview only: not sent',
+            body: 'The server has no staff report API yet, so this report stayed on the phone. Tell the Operator on duty directly.',
+          ),
+          const SizedBox(height: 12),
+        ],
         AppCard(
           color: incident ? c.dangerTint : c.successTint,
           borderColor: incident ? c.dangerTint : c.successTint,

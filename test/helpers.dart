@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supermarket_staff/app.dart';
+import 'package:supermarket_staff/core/device_notifications.dart';
 import 'package:supermarket_staff/core/providers.dart';
 import 'package:supermarket_staff/data/demo_operations_repository.dart';
 import 'package:supermarket_staff/data/providers.dart';
@@ -52,6 +53,7 @@ Future<({ProviderContainer container, DemoOperationsRepository repo, MemorySessi
   final container = ProviderContainer(overrides: [
     sessionStoreProvider.overrideWithValue(store),
     authRepositoryProvider.overrideWithValue(MockAuthRepository()),
+    deviceNotifierProvider.overrideWithValue(NoopDeviceNotifier()),
     operationsRepositoryProvider.overrideWith((ref) {
       ref.onDispose(repo.dispose);
       return repo;

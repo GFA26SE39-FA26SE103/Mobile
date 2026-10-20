@@ -44,8 +44,8 @@ class _EventTemplate {
 /// an OperationalEvent's response policy offers a Task to checked-in zone staff below the
 /// 2-task limit; the first acceptance (Handle Now or Handle Later) wins; unanswered offers
 /// re-notify every 60 s up to 3 times and then escalate to the Operator; confirmed staff
-/// reports become a routine Task or go through Incident qualification; shift swaps are
-/// requested by Staff and decided by the Operator. Events behave like the backend's
+/// reports become a routine Task or go through Incident qualification; a shift swap goes to a
+/// colleague first and then to the Manager. Events behave like the backend's
 /// 11/10/2026 episodes: escalation updates the same offer or task, recovery clears it.
 class DemoOperationsRepository implements OperationsRepository, DemoControls {
   DemoOperationsRepository({
@@ -87,7 +87,6 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
   int _template = 0;
 
   static const _teammates = ['Thảo', 'An Khương'];
-  static const _replacementCandidate = 'Minh Anh';
   static const _templates = [
     _EventTemplate('LONG_QUEUE', 'Long queue at checkout', Severity.warning, 'Checkout 3', '7 people waiting · 3 min',
         '11 people waiting · 6 min', 'Open 1 more counter and redirect the queue', 'CAM-03'),
@@ -256,54 +255,231 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
   Stream<List<ShiftSwapRequest>> watchSwapRequests() => _swaps.stream;
 
   @override
-  Future<ShiftSwapRequest> requestShiftSwap(String shiftId, SwapReason reason, String note) async {
-    await _wait(latency);
-    final shift = _shifts.value.firstWhere((s) => s.shiftId == shiftId);
-    if (!shift.canRequestSwapAt(clock())) {
-      throw const SwapNotAllowed('This shift has already started and can no longer be changed.');
-    }
-    if (_swaps.value.any((r) => r.shiftId == shiftId && r.status == SwapStatus.pending)) {
-      throw const SwapNotAllowed('You already have a pending swap request for this shift.');
-    }
-    if (reason == SwapReason.other && note.trim().isEmpty) {
-      throw const SwapNotAllowed('Add a short note so the Operator understands the request.');
-    }
-    final request = ShiftSwapRequest(
-      requestId: 'swap-${++_swapSequence}',
-      shiftId: shiftId,
-      reason: reason,
-      note: note.trim(),
-      submittedAt: clock(),
-      status: SwapStatus.pending,
+  Future<void> refresh() async {}
+
+  static const _me = 'me';
+  static const _colleagues = [('u-lan', 'Hoàng Lan'), ('u-duc', 'Minh Đức'), ('u-quang', 'Quang')];
+
+  SwapShift _swapShiftOf(Shift s) =>
+      SwapShift(shiftId: s.shiftId, ownerId: _me, label: s.label, start: s.start, end: s.end, zoneName: s.zoneName);
+
+  Shift _shiftOf(SwapShift s) => Shift(shiftId: s.shiftId, start: s.start, end: s.end, label: s.label, zoneName: s.zoneName);
+
+  /// The shift colleague [index] would give back: same hours, [index] + 1 days after mine.
+  SwapShift _colleagueShift(Shift mine, int index) {
+    final start = mine.start.add(Duration(days: index + 1));
+    return SwapShift(
+      shiftId: 'c-${_colleagues[index].$1}-${mine.shiftId}',
+      ownerId: _colleagues[index].$1,
+      label: mine.label,
+      start: start,
+      end: start.add(mine.end.difference(mine.start)),
+      zoneName: mine.zoneName,
     );
-    _swaps.value = [request, ..._swaps.value];
-    _notify(NotificationKind.swapUpdated, 'Swap request sent', 'The Operator will review your ${shift.label.toLowerCase()} shift request.');
+  }
+
+  /// Requests must be decided 24 h before the earliest affected shift.
+  static DateTime _deadline(DateTime start) => start.subtract(const Duration(hours: 24));
+
+  Shift _ownShift(String shiftId) {
+    final shift = _shifts.value.where((s) => s.shiftId == shiftId).firstOrNull;
+    if (shift == null) throw const SwapNotAllowed('This shift is no longer on your schedule.');
+    return shift;
+  }
+
+  void _checkOpenForSwap(Shift shift) {
+    if (!shift.canRequestSwapAt(clock())) throw const SwapNotAllowed('This shift has already started and can no longer be changed.');
+    if (!clock().isBefore(_deadline(shift.start))) {
+      throw const SwapNotAllowed('Swap requests close 24 hours before the shift. Talk to the Manager on duty.');
+    }
+  }
+
+  bool _hasOpenSwap(String shiftId) =>
+      _swaps.value.any((r) => r.status.isOpen && (r.shiftId == shiftId || r.targetShift?.shiftId == shiftId));
+
+  @override
+  Future<SwapCandidates> swapCandidates(String shiftId, SwapType type) async {
+    await _wait(latency);
+    final shift = _ownShift(shiftId);
+    _checkOpenForSwap(shift);
+    return SwapCandidates(
+      shiftId: shiftId,
+      type: type,
+      deadline: _deadline(shift.start),
+      hiddenCount: 1,
+      candidates: [
+        for (var i = 0; i < _colleagues.length; i++)
+          SwapCandidate(
+            userId: _colleagues[i].$1,
+            fullName: _colleagues[i].$2,
+            shift: type == SwapType.swap ? _colleagueShift(shift, i) : null,
+            weeklyHoursAfter: 32.0 + 4 * i + (type == SwapType.cover ? 8 : 0),
+          ),
+      ],
+    );
+  }
+
+  ShiftSwapRequest _withStatus(ShiftSwapRequest r, SwapStatus status,
+      {DateTime? respondedAt, String? decisionNote, String? cancelledBy, String? cancellationReason}) {
+    final decided = status == SwapStatus.approved || status == SwapStatus.rejected;
+    return ShiftSwapRequest(
+      requestId: r.requestId,
+      type: r.type,
+      status: status,
+      requesterId: r.requesterId,
+      requesterName: r.requesterName,
+      requesterShift: r.requesterShift,
+      targetId: r.targetId,
+      targetName: r.targetName,
+      targetShift: r.targetShift,
+      reason: r.reason,
+      note: r.note,
+      submittedAt: r.submittedAt,
+      expiresAt: r.expiresAt,
+      sentByMe: r.sentByMe,
+      targetRespondedAt: respondedAt ?? r.targetRespondedAt,
+      decidedBy: decided ? 'Trần Minh' : null,
+      decidedAt: decided ? clock() : null,
+      decisionNote: decisionNote,
+      cancelledBy: cancelledBy,
+      cancelledAt: cancelledBy == null ? null : clock(),
+      cancellationReason: cancellationReason,
+      // A can cancel while pending; B can withdraw only while the Manager decides.
+      canCancel: status == SwapStatus.pendingManager || (status == SwapStatus.pendingPeer && r.sentByMe),
+      canRespond: status == SwapStatus.pendingPeer && !r.sentByMe,
+    );
+  }
+
+  void _replaceSwap(ShiftSwapRequest next) => _swaps.value = [for (final r in _swaps.value) r.requestId == next.requestId ? next : r];
+
+  ShiftSwapRequest _swap(String requestId) {
+    final request = _swaps.value.where((r) => r.requestId == requestId).firstOrNull;
+    if (request == null) throw const SwapNotAllowed('This request no longer exists.');
     return request;
   }
 
   @override
-  String? decideLatestSwap({required bool approve}) {
-    final pending = _swaps.value.where((r) => r.status == SwapStatus.pending).toList();
-    if (pending.isEmpty) return 'There is no pending swap request.';
-    final request = pending.first;
-    final shift = _shifts.value.firstWhere((s) => s.shiftId == request.shiftId);
-    final decided = ShiftSwapRequest(
-      requestId: request.requestId,
-      shiftId: request.shiftId,
-      reason: request.reason,
-      note: request.note,
-      submittedAt: request.submittedAt,
-      status: approve ? SwapStatus.approved : SwapStatus.rejected,
-      replacement: approve ? _replacementCandidate : null,
-      decisionNote: approve ? null : 'Zone B would drop below the minimum staff for that shift.',
-    );
-    _swaps.value = [for (final r in _swaps.value) r.requestId == request.requestId ? decided : r];
-    if (approve) {
-      _shifts.value = _shifts.value.where((s) => s.shiftId != shift.shiftId).toList();
-      _notify(NotificationKind.swapUpdated, 'Swap approved', '$_replacementCandidate covers your ${shift.label.toLowerCase()} shift.');
-    } else {
-      _notify(NotificationKind.swapUpdated, 'Swap request declined', decided.decisionNote!);
+  Future<ShiftSwapRequest> requestShiftSwap({
+    required String shiftId,
+    required SwapType type,
+    required String targetUserId,
+    String? targetShiftId,
+    SwapReason? reason,
+    String note = '',
+  }) async {
+    await _wait(latency);
+    final shift = _ownShift(shiftId);
+    _checkOpenForSwap(shift);
+    if (_hasOpenSwap(shiftId)) throw const SwapNotAllowed('This shift already has a pending swap request.');
+    final index = _colleagues.indexWhere((c) => c.$1 == targetUserId);
+    if (index < 0) throw const SwapNotAllowed('Choose a colleague from the list.');
+    if (type == SwapType.swap && targetShiftId == null) throw const SwapNotAllowed('Choose which of their shifts you take.');
+    if (reason == SwapReason.other && note.trim().isEmpty) {
+      throw const SwapNotAllowed('Add a short note so your colleague and the Manager understand the request.');
     }
+    final theirs = type == SwapType.swap ? _colleagueShift(shift, index) : null;
+    final earliest = theirs != null && theirs.start.isBefore(shift.start) ? theirs.start : shift.start;
+    final request = ShiftSwapRequest(
+      requestId: 'swap-${++_swapSequence}',
+      type: type,
+      status: SwapStatus.pendingPeer,
+      requesterId: _me,
+      requesterName: staffName,
+      requesterShift: _swapShiftOf(shift),
+      targetId: targetUserId,
+      targetName: _colleagues[index].$2,
+      targetShift: theirs,
+      reason: reason,
+      note: note.trim(),
+      submittedAt: clock(),
+      expiresAt: _deadline(earliest),
+      sentByMe: true,
+      canCancel: true,
+    );
+    _swaps.value = [request, ..._swaps.value];
+    _notify(NotificationKind.swapUpdated, 'Swap request sent',
+        '${request.targetName} answers first, then the Manager decides on your ${shift.label.toLowerCase()} shift.');
+    return request;
+  }
+
+  @override
+  Future<ShiftSwapRequest> respondToSwap(String requestId, {required bool accept}) async {
+    await _wait(latency);
+    final request = _swap(requestId);
+    if (!request.canRespond) throw const SwapNotAllowed('This request is no longer waiting for your answer.');
+    final next = _withStatus(request, accept ? SwapStatus.pendingManager : SwapStatus.declinedByPeer, respondedAt: clock());
+    _replaceSwap(next);
+    return next;
+  }
+
+  @override
+  Future<ShiftSwapRequest> cancelSwap(String requestId, {String? reason}) async {
+    await _wait(latency);
+    final request = _swap(requestId);
+    if (!request.canCancel) throw const SwapNotAllowed('This request can no longer be cancelled.');
+    final next = _withStatus(request, SwapStatus.cancelled, cancelledBy: staffName, cancellationReason: reason);
+    _replaceSwap(next);
+    return next;
+  }
+
+  @override
+  String? advanceLatestSwap({required bool approve}) {
+    final request = _swaps.value.where((r) => r.status.isOpen).firstOrNull;
+    if (request == null) return 'There is no pending swap request.';
+    if (request.status == SwapStatus.pendingPeer) {
+      if (!request.sentByMe) return 'This request is waiting for your answer. Open it under Shifts → Swap requests.';
+      _replaceSwap(_withStatus(request, approve ? SwapStatus.pendingManager : SwapStatus.declinedByPeer, respondedAt: clock()));
+      _notify(NotificationKind.swapUpdated, approve ? '${request.otherName} accepted' : '${request.otherName} declined',
+          approve ? 'Your swap request now waits for the Manager.' : 'You keep your shift.');
+      return null;
+    }
+    if (!approve) {
+      _replaceSwap(_withStatus(request, SwapStatus.rejected, decisionNote: 'Zone B would drop below the minimum staff for that shift.'));
+      _notify(NotificationKind.swapUpdated, 'Swap request rejected', 'The Manager kept the schedule as it is.');
+      return null;
+    }
+    _replaceSwap(_withStatus(request, SwapStatus.approved));
+    final give = request.iGive!;
+    final get = request.iGet;
+    _shifts.value = [
+      for (final s in _shifts.value)
+        if (s.shiftId != give.shiftId) s,
+      if (get != null) _shiftOf(get),
+    ]..sort((a, b) => a.start.compareTo(b.start));
+    _notify(
+      NotificationKind.swapUpdated,
+      'Swap approved',
+      get == null ? '${request.otherName} now covers your ${give.label.toLowerCase()} shift.' : 'Your schedule now has the shift from ${request.otherName}.',
+    );
+    return null;
+  }
+
+  @override
+  String? receiveSwapRequest() {
+    final now = clock();
+    final mine = _shifts.value.where((s) => now.isBefore(_deadline(s.start)) && !_hasOpenSwap(s.shiftId)).firstOrNull;
+    if (mine == null) return 'None of your shifts can still be swapped.';
+    final (id, name) = _colleagues.last;
+    final theirs = _colleagueShift(mine, 0);
+    final request = ShiftSwapRequest(
+      requestId: 'swap-${++_swapSequence}',
+      type: SwapType.swap,
+      status: SwapStatus.pendingPeer,
+      requesterId: id,
+      requesterName: name,
+      requesterShift: SwapShift(shiftId: theirs.shiftId, ownerId: id, label: theirs.label, start: theirs.start, end: theirs.end, zoneName: theirs.zoneName),
+      targetId: _me,
+      targetName: staffName,
+      targetShift: _swapShiftOf(mine),
+      reason: SwapReason.study,
+      note: 'Exam that day. Can you take my shift?',
+      submittedAt: now,
+      expiresAt: _deadline(mine.start),
+      sentByMe: false,
+      canRespond: true,
+    );
+    _swaps.value = [request, ..._swaps.value];
+    _notify(NotificationKind.swapUpdated, 'Swap request from $name', 'Swap your ${mine.label.toLowerCase()} shift on ${mine.start.day}/${mine.start.month}?');
     return null;
   }
 
@@ -352,7 +528,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
         measurement: template.measurement,
         instructions: template.instructions,
         createdAt: now,
-        recipients: ['$staffName (you)', ..._teammates],
+        recipients: 1 + _teammates.length,
         attempt: 1,
         nextAlertAt: now.add(realertInterval),
         cameraCode: template.camera,
@@ -366,11 +542,11 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
     (_timers[id] ??= []).add(Timer(realertInterval, () {
       final current = _offer(id);
       if (current == null || !current.isOpen) return;
-      if (current.attempt >= TaskOffer.maxAttempts) {
+      if (current.attempt >= current.maxAttempts) {
         _replaceOffer(current.copyWith(status: OfferStatus.escalated));
         _cancelTimers(id);
         _notify(NotificationKind.offerEscalated, 'Offer passed to Operator',
-            '${current.title} · nobody accepted after ${TaskOffer.maxAttempts} offers',
+            '${current.title} · nobody accepted after ${current.maxAttempts} offers',
             severity: current.priority);
         return;
       }

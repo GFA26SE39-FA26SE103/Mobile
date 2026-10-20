@@ -5,11 +5,13 @@ import 'package:go_router/go_router.dart';
 import '../data/providers.dart';
 import '../features/alerts/alerts_screen.dart';
 import '../features/alerts/incoming_alert.dart';
+import '../features/alerts/notification_host.dart';
 import '../features/auth/auth_controller.dart';
 import '../features/auth/sign_in_screen.dart';
 import '../features/me/me_screen.dart';
 import '../features/report/report_screens.dart';
 import '../features/shifts/shifts_screens.dart';
+import '../features/shifts/swap_screens.dart';
 import '../features/tasks/tasks_screens.dart';
 
 class _AuthListenable extends ChangeNotifier {
@@ -86,6 +88,11 @@ final routerProvider = Provider<GoRouter>((ref) {
               builder: (_, _) => const MyShiftsScreen(),
               routes: [
                 GoRoute(path: 'checked-in', builder: (_, _) => const CheckedInScreen()),
+                GoRoute(
+                  path: 'swaps',
+                  builder: (_, _) => const SwapInboxScreen(),
+                  routes: [GoRoute(path: ':requestId', builder: (_, s) => SwapDetailScreen(requestId: s.pathParameters['requestId']!))],
+                ),
                 GoRoute(path: ':shiftId/swap', builder: (_, s) => SwapRequestScreen(shiftId: s.pathParameters['shiftId']!)),
               ],
             ),
@@ -113,8 +120,9 @@ class _StaffShell extends ConsumerWidget {
     final unread = ref.watch(unreadCountProvider);
     final openOffers = ref.watch(openOffersProvider).valueOrNull?.length ?? 0;
     final badge = unread + openOffers;
+    final swaps = ref.watch(swapsAwaitingMeProvider);
     return Scaffold(
-      body: TaskOfferHost(child: shell),
+      body: DeviceNotificationHost(child: TaskOfferHost(child: shell)),
       bottomNavigationBar: NavigationBar(
         selectedIndex: shell.currentIndex,
         onDestinationSelected: (i) => shell.goBranch(i, initialLocation: i == shell.currentIndex),
@@ -126,7 +134,11 @@ class _StaffShell extends ConsumerWidget {
             selectedIcon: Badge(isLabelVisible: badge > 0, label: Text('$badge'), child: const Icon(Icons.notifications)),
             label: 'Alerts',
           ),
-          const NavigationDestination(icon: Icon(Icons.calendar_today_outlined), selectedIcon: Icon(Icons.calendar_today), label: 'Shifts'),
+          NavigationDestination(
+            icon: Badge(isLabelVisible: swaps > 0, label: Text('$swaps'), child: const Icon(Icons.calendar_today_outlined)),
+            selectedIcon: Badge(isLabelVisible: swaps > 0, label: Text('$swaps'), child: const Icon(Icons.calendar_today)),
+            label: 'Shifts',
+          ),
           const NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Me'),
         ],
       ),

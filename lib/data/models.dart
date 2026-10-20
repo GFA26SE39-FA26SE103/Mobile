@@ -30,27 +30,36 @@ class Shift {
     required this.end,
     required this.label,
     required this.zoneName,
-    required this.zoneDetail,
-    required this.floorName,
-    required this.storeName,
-    required this.teammates,
+    this.zoneDetail = '',
+    this.floorName = '',
+    this.storeName = '',
+    this.teammates = const [],
     this.checkedInAt,
+    // Dart private named parameter: callers pass `checkInOpensAt:`.
+    this._checkInOpensAt,
   });
 
+  /// The ShiftAssignment id on the backend.
   final String shiftId;
   final DateTime start;
   final DateTime end;
   final String label;
   final String zoneName;
+
+  /// Details the API does not return yet (counters, floor, store, teammates) are empty there.
   final String zoneDetail;
   final String floorName;
   final String storeName;
   final List<String> teammates;
   final DateTime? checkedInAt;
+  final DateTime? _checkInOpensAt;
 
   /// BR: check-in opens 15 minutes before the shift starts.
   static const checkInWindow = Duration(minutes: 15);
-  DateTime get checkInOpensAt => start.subtract(checkInWindow);
+  DateTime get checkInOpensAt => _checkInOpensAt ?? start.subtract(checkInWindow);
+
+  /// "Floor 1 · Counters 1–6", or empty when neither is known.
+  String get placeDetail => [floorName, zoneDetail].where((s) => s.isNotEmpty).join(' · ');
 
   bool get isCheckedIn => checkedInAt != null;
   bool isActiveAt(DateTime now) => !now.isBefore(start) && now.isBefore(end);
@@ -70,13 +79,14 @@ class Shift {
         storeName: storeName,
         teammates: teammates,
         checkedInAt: checkedInAt ?? this.checkedInAt,
+        checkInOpensAt: _checkInOpensAt,
       );
 }
 
 /// Whether this staff member can currently be offered Tasks (BR-19, BR-23, BR-35):
 /// on shift, checked in, assigned to the zone, and below the active-task limit.
 class Eligibility {
-  const Eligibility({required this.checkedIn, required this.activeTasks, this.zoneName});
+  const Eligibility({required this.checkedIn, required this.activeTasks, this.zoneName, this.limit = workloadLimit});
 
   static const workloadLimit = 2;
 
@@ -84,13 +94,17 @@ class Eligibility {
   final int activeTasks;
   final String? zoneName;
 
-  bool get atWorkloadLimit => activeTasks >= workloadLimit;
+  /// The server's limit (`maxActiveTasks`); BR-23 says 2.
+  final int limit;
+
+  bool get atWorkloadLimit => activeTasks >= limit;
   bool get canReceiveOffers => checkedIn && !atWorkloadLimit;
 }
 
 /// `eventCleared`: the OperationalEvent episode recovered before anyone accepted (provisional
-/// demo behaviour; see open point 5 in docs/API_CONTRACT.md).
-enum OfferStatus { open, takenByOther, accepted, declined, escalated, eventCleared }
+/// demo behaviour; see open point 5 in docs/API_CONTRACT.md). `withdrawn`: closed for another
+/// reason, e.g. the Operator assigned the task by hand.
+enum OfferStatus { open, takenByOther, accepted, declined, escalated, eventCleared, withdrawn }
 
 /// A Task offered to eligible zone staff. The first valid acceptance wins (BR-21).
 class TaskOffer {
@@ -108,6 +122,7 @@ class TaskOffer {
     required this.recipients,
     required this.attempt,
     required this.nextAlertAt,
+    this.maxAttempts = defaultMaxAttempts,
     this.status = OfferStatus.open,
     this.takenBy,
     this.takenAt,
@@ -118,7 +133,7 @@ class TaskOffer {
   });
 
   /// BR-22: re-notify every 60 s up to the configured limit, then the Operator assigns manually.
-  static const maxAttempts = 3;
+  static const defaultMaxAttempts = 3;
   static const realertInterval = Duration(seconds: 60);
 
   final String offerId;
@@ -133,8 +148,12 @@ class TaskOffer {
   final String measurement;
   final String instructions;
   final DateTime createdAt;
-  final List<String> recipients;
+  /// How many staff members the offer went to.
+  final int recipients;
   final int attempt;
+
+  /// Total offers before the Operator takes over (server `SystemSetting`, 3 by default).
+  final int maxAttempts;
   final DateTime nextAlertAt;
   final OfferStatus status;
   final String? takenBy;
@@ -175,6 +194,7 @@ class TaskOffer {
         createdAt: createdAt,
         recipients: recipients,
         attempt: attempt ?? this.attempt,
+        maxAttempts: maxAttempts,
         nextAlertAt: nextAlertAt ?? this.nextAlertAt,
         status: status ?? this.status,
         takenBy: takenBy ?? this.takenBy,
@@ -293,7 +313,9 @@ enum NotificationKind {
   eventCleared,
   reportSent,
   shiftStarted,
+  shiftChanged,
   swapUpdated,
+  general,
 }
 
 class AppNotification {
@@ -458,6 +480,7 @@ class ReportReceipt {
     required this.submittedAt,
     required this.edited,
     this.incidentCode,
+    this.preview = false,
   });
 
   final String reportCode;
@@ -469,49 +492,170 @@ class ReportReceipt {
   final int offeredTo;
   final DateTime submittedAt;
   final bool edited;
+
+  /// Made in the app only: the server has no StaffReport API yet, so nothing was sent.
+  final bool preview;
 }
 
 enum SwapReason {
-  personal('Personal matter'),
-  health('Health'),
-  study('Study or exam'),
-  other('Other');
+  personal('PERSONAL', 'Personal matter'),
+  health('HEALTH', 'Health'),
+  study('STUDY', 'Study or exam'),
+  other('OTHER', 'Other');
 
-  const SwapReason(this.label);
+  const SwapReason(this.code, this.label);
+
+  /// `ShiftSwapRequest.reason_code` on the backend.
+  final String code;
   final String label;
+
+  static SwapReason? fromCode(String? code) => values.where((r) => r.code == code).firstOrNull;
 }
 
+/// SWAP exchanges my shift for one of the colleague's; COVER hands my shift to the colleague.
+enum SwapType {
+  swap('SWAP', 'Swap shifts'),
+  cover('COVER', 'Ask to cover');
+
+  const SwapType(this.code, this.label);
+  final String code;
+  final String label;
+
+  static SwapType fromCode(String? code) => code == 'COVER' ? cover : swap;
+}
+
+/// A → PENDING_PEER → B accepts → PENDING_MANAGER → APPROVED / REJECTED. A pending request can also
+/// end as DECLINED_BY_PEER, CANCELLED or EXPIRED (24 h before the earliest affected shift).
 enum SwapStatus {
-  pending('Waiting for Operator'),
-  approved('Approved'),
-  rejected('Rejected');
+  pendingPeer('PENDING_PEER', 'Waiting for colleague'),
+  pendingManager('PENDING_MANAGER', 'Waiting for the Manager'),
+  approved('APPROVED', 'Approved'),
+  rejected('REJECTED', 'Rejected by the Manager'),
+  declinedByPeer('DECLINED_BY_PEER', 'Declined by colleague'),
+  cancelled('CANCELLED', 'Cancelled'),
+  expired('EXPIRED', 'Expired');
 
-  const SwapStatus(this.label);
+  const SwapStatus(this.code, this.label);
+  final String code;
   final String label;
+
+  bool get isOpen => this == pendingPeer || this == pendingManager;
+
+  static SwapStatus fromCode(String code) => values.firstWhere((s) => s.code == code, orElse: () => cancelled);
 }
 
-/// Staff-requested, Operator-approved shift swap (05/10/2026 workflow delta). The system
-/// proposes replacement candidates; the Operator picks one. No direct Staff-to-Staff negotiation.
+/// One shift assignment as a swap request sees it.
+class SwapShift {
+  const SwapShift({
+    required this.shiftId,
+    required this.ownerId,
+    required this.label,
+    required this.start,
+    required this.end,
+    required this.zoneName,
+  });
+
+  final String shiftId;
+  final String ownerId;
+  final String label;
+  final DateTime start;
+  final DateTime end;
+  final String zoneName;
+}
+
+/// Staff A asks colleague B; B accepts or declines; then a Manager approves (MF-04).
 class ShiftSwapRequest {
   const ShiftSwapRequest({
     required this.requestId,
-    required this.shiftId,
-    required this.reason,
-    required this.note,
-    required this.submittedAt,
+    required this.type,
     required this.status,
-    this.replacement,
+    required this.requesterId,
+    required this.requesterName,
+    required this.requesterShift,
+    required this.submittedAt,
+    required this.sentByMe,
+    this.targetId,
+    this.targetName,
+    this.targetShift,
+    this.reason,
+    this.note = '',
+    this.expiresAt,
+    this.targetRespondedAt,
+    this.decidedBy,
+    this.decidedAt,
     this.decisionNote,
+    this.cancelledBy,
+    this.cancelledAt,
+    this.cancellationReason,
+    this.canCancel = false,
+    this.canRespond = false,
   });
 
   final String requestId;
-  final String shiftId;
-  final SwapReason reason;
+  final SwapType type;
+  final SwapStatus status;
+  final String requesterId;
+  final String requesterName;
+  final SwapShift requesterShift;
+  final String? targetId;
+  final String? targetName;
+
+  /// The colleague's shift that comes back in a SWAP; null for COVER.
+  final SwapShift? targetShift;
+  final SwapReason? reason;
   final String note;
   final DateTime submittedAt;
-  final SwapStatus status;
-  final String? replacement;
+
+  /// After this moment the request expires and the schedule stays as it is.
+  final DateTime? expiresAt;
+  final DateTime? targetRespondedAt;
+  final String? decidedBy;
+  final DateTime? decidedAt;
   final String? decisionNote;
+  final String? cancelledBy;
+  final DateTime? cancelledAt;
+  final String? cancellationReason;
+
+  /// True when I am the requester (A), false when I am the colleague asked (B).
+  final bool sentByMe;
+  final bool canCancel;
+  final bool canRespond;
+
+  /// The requester's shift, i.e. the shift this request is about.
+  String get shiftId => requesterShift.shiftId;
+
+  /// The other person from my point of view.
+  String get otherName => (sentByMe ? targetName : requesterName) ?? 'Colleague';
+
+  /// What I hand over and what I get back if the request is approved.
+  SwapShift? get iGive => sentByMe ? requesterShift : targetShift;
+  SwapShift? get iGet => sentByMe ? targetShift : requesterShift;
+}
+
+/// A colleague who passes every swap rule, with the shift they would give back for a SWAP.
+class SwapCandidate {
+  const SwapCandidate({required this.userId, required this.fullName, required this.weeklyHoursAfter, this.shift});
+
+  final String userId;
+  final String fullName;
+  final SwapShift? shift;
+
+  /// The colleague's hours that week if the request is approved.
+  final double weeklyHoursAfter;
+}
+
+class SwapCandidates {
+  const SwapCandidates({required this.shiftId, required this.type, required this.deadline, required this.candidates, required this.hiddenCount});
+
+  final String shiftId;
+  final SwapType type;
+
+  /// The request must be decided by then (24 h before the shift).
+  final DateTime deadline;
+  final List<SwapCandidate> candidates;
+
+  /// Colleagues left out because a rule fails for them.
+  final int hiddenCount;
 }
 
 class CheckInTooEarly implements Exception {
@@ -519,10 +663,11 @@ class CheckInTooEarly implements Exception {
   final DateTime opensAt;
 }
 
+/// Who took the task is known when the server says so; a withdrawn offer may not name them.
 class TaskAlreadyTaken implements Exception {
-  const TaskAlreadyTaken({required this.takenBy, required this.takenAt});
-  final String takenBy;
-  final DateTime takenAt;
+  const TaskAlreadyTaken({this.takenBy, this.takenAt});
+  final String? takenBy;
+  final DateTime? takenAt;
 }
 
 class WorkloadLimitReached implements Exception {
@@ -536,4 +681,13 @@ class OfferNoLongerOpen implements Exception {
 class SwapNotAllowed implements Exception {
   const SwapNotAllowed(this.message);
   final String message;
+}
+
+/// Any other refused or failed call, with a message that can be shown as is.
+class OperationFailed implements Exception {
+  const OperationFailed(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
 }

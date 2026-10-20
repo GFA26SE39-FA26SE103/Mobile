@@ -220,7 +220,7 @@ void main() {
         expect(cleared.status, OfferStatus.eventCleared);
         expect(cleared.eventClearedAt, isNotNull);
 
-        async.elapse(TaskOffer.realertInterval * (TaskOffer.maxAttempts + 1));
+        async.elapse(TaskOffer.realertInterval * (TaskOffer.defaultMaxAttempts + 1));
         expect(run(async, repo.watchOffer(offer.offerId).first)!.status, OfferStatus.eventCleared);
         expect(failure(async, repo.respondToOffer(offer.offerId, TaskResponse.handleNow)), isA<OfferNoLongerOpen>());
         expect(repo.clearLatestEvent(), contains('No active AI event'));
@@ -328,35 +328,94 @@ void main() {
       });
     });
 
-    test('a swap request waits for the Operator, then an approval hands the shift over', () {
+    test('SWAP: the colleague accepts, the Manager approves, and the two shifts change hands', () {
       withRepo(start, (async, repo) {
-        final request = run(async, repo.requestShiftSwap('shift-1', SwapReason.study, 'Exam that morning'));
-        expect(request.status, SwapStatus.pending);
-        expect(failure(async, repo.requestShiftSwap('shift-1', SwapReason.study, '')), isA<SwapNotAllowed>());
+        final options = run(async, repo.swapCandidates('shift-3', SwapType.swap));
+        expect(options.candidates, isNotEmpty);
+        expect(options.deadline, run(async, repo.watchShifts().first).firstWhere((s) => s.shiftId == 'shift-3').start.subtract(const Duration(hours: 24)));
+        final lan = options.candidates.first;
 
-        expect(repo.decideLatestSwap(approve: true), isNull);
-        final swaps = run(async, repo.watchSwapRequests().first);
-        expect(swaps.single.status, SwapStatus.approved);
-        expect(swaps.single.replacement, isNotNull);
-        expect(run(async, repo.watchShifts().first).any((s) => s.shiftId == 'shift-1'), isFalse);
+        final request = run(async, repo.requestShiftSwap(
+          shiftId: 'shift-3',
+          type: SwapType.swap,
+          targetUserId: lan.userId,
+          targetShiftId: lan.shift!.shiftId,
+          reason: SwapReason.study,
+          note: 'Exam that afternoon',
+        ));
+        expect(request.status, SwapStatus.pendingPeer);
+        expect(request.sentByMe, isTrue);
+        expect(request.canCancel, isTrue);
+        // One open request per shift.
+        expect(
+          failure(async, repo.requestShiftSwap(shiftId: 'shift-3', type: SwapType.cover, targetUserId: lan.userId)),
+          isA<SwapNotAllowed>(),
+        );
+
+        expect(repo.advanceLatestSwap(approve: true), isNull);
+        expect(run(async, repo.watchSwapRequests().first).first.status, SwapStatus.pendingManager);
+        expect(repo.advanceLatestSwap(approve: true), isNull);
+
+        final swap = run(async, repo.watchSwapRequests().first).first;
+        expect(swap.status, SwapStatus.approved);
+        final shifts = run(async, repo.watchShifts().first);
+        expect(shifts.any((s) => s.shiftId == 'shift-3'), isFalse);
+        expect(shifts.any((s) => s.shiftId == lan.shift!.shiftId), isTrue);
       });
     });
 
-    test('a started shift cannot be swapped and Other needs a note', () {
+    test('a shift inside the 24-hour window or already started cannot be swapped, and Other needs a note', () {
       withRepo(start, (async, repo) {
-        expect(failure(async, repo.requestShiftSwap('shift-today', SwapReason.personal, '')), isA<SwapNotAllowed>());
-        expect(failure(async, repo.requestShiftSwap('shift-3', SwapReason.other, '  ')), isA<SwapNotAllowed>());
+        // Tomorrow 06:00 is less than 24 hours away at 14:20 today.
+        expect(failure(async, repo.swapCandidates('shift-1', SwapType.cover)), isA<SwapNotAllowed>());
+        expect(failure(async, repo.requestShiftSwap(shiftId: 'shift-today', type: SwapType.cover, targetUserId: 'u-lan')),
+            isA<SwapNotAllowed>());
+        expect(
+          failure(async, repo.requestShiftSwap(shiftId: 'shift-3', type: SwapType.cover, targetUserId: 'u-lan', reason: SwapReason.other, note: '  ')),
+          isA<SwapNotAllowed>(),
+        );
+        expect(failure(async, repo.requestShiftSwap(shiftId: 'shift-3', type: SwapType.swap, targetUserId: 'u-lan')), isA<SwapNotAllowed>());
       });
     });
 
-    test('a declined swap keeps the shift and records the reason', () {
+    test('a COVER rejected by the Manager keeps the shift and records the reason', () {
       withRepo(start, (async, repo) {
-        run(async, repo.requestShiftSwap('shift-3', SwapReason.personal, ''));
-        repo.decideLatestSwap(approve: false);
+        run(async, repo.requestShiftSwap(shiftId: 'shift-3', type: SwapType.cover, targetUserId: 'u-duc', reason: SwapReason.personal));
+        repo.advanceLatestSwap(approve: true);
+        repo.advanceLatestSwap(approve: false);
         final swap = run(async, repo.watchSwapRequests().first).single;
         expect(swap.status, SwapStatus.rejected);
         expect(swap.decisionNote, isNotEmpty);
         expect(run(async, repo.watchShifts().first).any((s) => s.shiftId == 'shift-3'), isTrue);
+      });
+    });
+
+    test('the requester can cancel while the colleague has not answered', () {
+      withRepo(start, (async, repo) {
+        final request = run(async, repo.requestShiftSwap(shiftId: 'shift-4', type: SwapType.cover, targetUserId: 'u-lan', reason: SwapReason.health));
+        final cancelled = run(async, repo.cancelSwap(request.requestId, reason: 'Feeling better'));
+        expect(cancelled.status, SwapStatus.cancelled);
+        expect(cancelled.canCancel, isFalse);
+        expect(failure(async, repo.cancelSwap(request.requestId)), isA<SwapNotAllowed>());
+      });
+    });
+
+    test('a request from a colleague waits for my answer; accepting sends it to the Manager', () {
+      withRepo(start, (async, repo) {
+        expect(repo.receiveSwapRequest(), isNull);
+        final received = run(async, repo.watchSwapRequests().first).single;
+        expect(received.sentByMe, isFalse);
+        expect(received.canRespond, isTrue);
+        expect(received.iGive?.shiftId, isNotNull);
+        // The demo Manager does not decide before I answer.
+        expect(repo.advanceLatestSwap(approve: true), isNotNull);
+
+        final accepted = run(async, repo.respondToSwap(received.requestId, accept: true));
+        expect(accepted.status, SwapStatus.pendingManager);
+        expect(accepted.canRespond, isFalse);
+        // B can withdraw while the Manager decides.
+        expect(accepted.canCancel, isTrue);
+        expect(failure(async, repo.respondToSwap(received.requestId, accept: false)), isA<SwapNotAllowed>());
       });
     });
   });

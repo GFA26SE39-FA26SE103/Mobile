@@ -57,11 +57,11 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
           const SizedBox(height: 12),
         ],
         if (eligibility != null && eligibility.checkedIn && eligibility.atWorkloadLimit) ...[
-          const InfoBanner(
+          InfoBanner(
             tone: BannerTone.warning,
             icon: Icons.pause_circle_outline,
             title: 'New offers are paused',
-            body: 'You have ${Eligibility.workloadLimit} active tasks. Finish one to receive new task offers.',
+            body: 'You have ${eligibility.limit} active tasks. Finish one to receive new task offers.',
           ),
           const SizedBox(height: 12),
         ],
@@ -199,7 +199,7 @@ class _TaskCard extends StatelessWidget {
               Icon(Icons.place_outlined, size: 16, color: c.textMuted),
               const SizedBox(width: 4),
               Expanded(
-                child: Text('${task.zoneName.split(' · ').first} · ${task.location}', style: TextStyle(color: c.textMuted, fontSize: 13.5)),
+                child: Text(place(task.zoneName, task.location), style: TextStyle(color: c.textMuted, fontSize: 13.5)),
               ),
             ]),
             if (chips.isNotEmpty) ...[const SizedBox(height: 8), Wrap(spacing: 6, runSpacing: 6, children: chips)],
@@ -227,6 +227,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     setState(() => _starting = true);
     try {
       await ref.read(operationsRepositoryProvider).startTask(widget.taskId);
+    } on OperationFailed catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (mounted) setState(() => _starting = false);
     }
@@ -294,7 +296,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         AppCard(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(children: [
-            _Row('Location', '${task.zoneName.split(' · ').first} · ${task.location}'),
+            _Row('Location', place(task.zoneName, task.location)),
             Divider(height: 1, color: c.border),
             _Row('Raised', hm(task.createdAt)),
             Divider(height: 1, color: c.border),
@@ -308,7 +310,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           ]),
         ),
         const SizedBox(height: 12),
-        InfoBanner(tone: BannerTone.brand, icon: Icons.assignment_outlined, title: 'What to do', body: task.instructions),
+        InfoBanner(
+          tone: BannerTone.brand,
+          icon: Icons.assignment_outlined,
+          title: 'What to do',
+          body: task.instructions.isEmpty ? 'Check the area and resolve the issue.' : task.instructions,
+        ),
         const SizedBox(height: 20),
         if (task.status == TaskStatus.accepted) ...[
           FilledButton.icon(

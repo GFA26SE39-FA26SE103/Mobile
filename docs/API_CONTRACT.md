@@ -1,5 +1,12 @@
 # Staff mobile API — proposed contract (10/10/2026 baseline)
 
+> **Superseded for implemented routes (20/10/2026).** Shifts, check-in, eligibility, task offers,
+> tasks, notifications and SWAP/COVER requests now exist on the backend and the app calls them
+> through `lib/data/http_operations_repository.dart`; the routes and error codes are in Back-End
+> `docs/API.md` (MF-02 staff tasks, MF-04 swaps), which wins where this file differs. Swaps follow
+> A → colleague accepts → Manager approves, not the Operator flow below. Still open here:
+> StaffReport (the app keeps it in-app) and push (the app polls).
+
 Status: **proposal**, aligned with Back-End `AGENTS.md` / `docs/PROJECT_CONTEXT.md` (10/10/2026
 synchronization, provisional ERD v4, 11/10/2026 OperationalEvent episodes on Database V2) and
 Reports 1–3 (BR-01…BR-40). The backend has no Task,

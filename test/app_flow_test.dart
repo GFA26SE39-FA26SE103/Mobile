@@ -181,7 +181,7 @@ void main() {
     await settle(tester);
     expect(text('AI filled 5 fields'), findsOneWidget);
 
-    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Confirm and send'), 200);
+    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Confirm and send'), 200, scrollable: find.byType(Scrollable).first);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Confirm and send'));
     await settle(tester);
 
@@ -198,7 +198,7 @@ void main() {
     await settle(tester);
 
     expect(text('Restock or shelf tidy'), findsOneWidget);
-    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Confirm and send'), 200);
+    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Confirm and send'), 200, scrollable: find.byType(Scrollable).first);
     expect(find.textContaining('No incident is opened'), findsOneWidget);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Confirm and send'));
     await settle(tester);
@@ -207,13 +207,23 @@ void main() {
     expect(text('ROUTINE REQUEST'), findsOneWidget);
   });
 
-  appTest('shift swap: request a future shift, then the Operator approves it', (tester, app) async {
+  appTest('shift swap: pick a colleague, they accept, then the Manager approves', (tester, app) async {
     await goTab(tester, 'Shifts');
-    // Tomorrow's morning shift is the first upcoming row.
-    await tester.tap(find.textContaining('Morning ·').first);
+    // The last evening row is days away, well before the 24-hour cut-off (today's card may say Evening too).
+    await tester.tap(find.textContaining('Evening ·').last);
     await settle(tester);
-    expect(find.widgetWithText(AppBar, 'Request a shift swap'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Choose a colleague'), findsOneWidget);
 
+    await tapVisible(tester, text('Hoàng Lan'));
+    await settle(tester);
+    await tester.scrollUntilVisible(find.textContaining('colleague is hidden'), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.textContaining('colleague is hidden'), findsOneWidget);
+    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Choose Hoàng Lan'), 200, scrollable: find.byType(Scrollable).first);
+    await tapVisible(tester, find.widgetWithText(FilledButton, 'Choose Hoàng Lan'));
+    await settle(tester);
+    expect(text("Hoàng Lan's shift"), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Send request'), 200, scrollable: find.byType(Scrollable).first);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Send request'));
     await settle(tester);
     expect(text('Choose a reason for the swap.'), findsOneWidget);
@@ -221,11 +231,38 @@ void main() {
     await tapVisible(tester, find.widgetWithText(ChoiceChip, SwapReason.study.label));
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Send request'));
     await settle(tester);
-    expect(text('Request sent · waiting for the Operator'), findsOneWidget);
+    expect(text('Waiting for Hoàng Lan'), findsOneWidget);
+    await tester.scrollUntilVisible(find.widgetWithText(TextButton, 'Cancel request'), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.widgetWithText(TextButton, 'Cancel request'), findsOneWidget);
 
-    app.repo.decideLatestSwap(approve: true);
+    app.repo.advanceLatestSwap(approve: true);
+    await settle(tester);
+    expect(text('Waiting for the Manager'), findsOneWidget);
+
+    app.repo.advanceLatestSwap(approve: true);
     await settle(tester);
     expect(text('Shift no longer yours'), findsOneWidget);
+  });
+
+  appTest('a swap request from a colleague: open it from My shifts and accept', (tester, app) async {
+    app.repo.receiveSwapRequest();
+    await goTab(tester, 'Shifts');
+    expect(text('1 swap request waiting for your answer'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Open requests'));
+    await settle(tester);
+    expect(find.widgetWithText(AppBar, 'Swap requests'), findsOneWidget);
+    await tester.tap(text('From Quang · Swap shifts'));
+    await settle(tester);
+
+    expect(find.widgetWithText(AppBar, 'Request from Quang'), findsOneWidget);
+    expect(text('Exam that day. Can you take my shift?'), findsOneWidget);
+    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Accept swap'), 200, scrollable: find.byType(Scrollable).first);
+    await tapVisible(tester, find.widgetWithText(FilledButton, 'Accept swap'));
+    await settle(tester);
+    expect(text('Waiting for the Manager'), findsOneWidget);
+    await tester.scrollUntilVisible(find.widgetWithText(TextButton, 'Withdraw my acceptance'), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.widgetWithText(TextButton, 'Withdraw my acceptance'), findsOneWidget);
   });
 
   appTest('at the 2-task limit My tasks explains that offers are paused', (tester, app) async {

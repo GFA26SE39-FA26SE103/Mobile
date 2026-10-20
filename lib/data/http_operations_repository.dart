@@ -1,0 +1,602 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
+
+import '../core/api/api_exception.dart';
+import 'demo_operations_repository.dart';
+import 'models.dart';
+import 'operations_repository.dart';
+
+/// A server list that is polled, keeps its last good value, and replays it to new listeners.
+class _Feed<T> {
+  _Feed(this._load);
+  final Future<T> Function() _load;
+  final _controller = StreamController<T>.broadcast();
+  T? _value;
+  Object? _error;
+  Future<void>? _loading;
+
+  T? get value => _value;
+
+  set value(T next) {
+    _value = next;
+    _error = null;
+    if (!_controller.isClosed) _controller.add(next);
+  }
+
+  Stream<T> get stream async* {
+    final current = _value;
+    if (current != null) {
+      yield current;
+    } else if (_error != null) {
+      yield* Stream<T>.error(_error!);
+    }
+    yield* _controller.stream;
+  }
+
+  /// Loads once at a time. A failure after a good load keeps the old value on screen.
+  Future<void> refresh() => _loading ??= () async {
+        try {
+          value = await _load();
+        } catch (e, s) {
+          _error = e;
+          if (_value == null && !_controller.isClosed) _controller.addError(e, s);
+        } finally {
+          _loading = null;
+        }
+      }();
+
+  void close() => _controller.close();
+}
+
+/// [OperationsRepository] over the backend API (`docs/API.md`, MF-02 staff tasks and MF-04 swaps).
+///
+/// The API has no push channel yet (FCM is not built), so offers, tasks, eligibility and
+/// notifications are polled every [fastPoll], shifts and swap requests every [slowPoll].
+/// StaffReport has no API yet either: [extractReport] and [submitReport] run on the in-app demo
+/// and the receipt is marked [ReportReceipt.preview].
+class HttpOperationsRepository implements OperationsRepository {
+  HttpOperationsRepository(
+    this._dio, {
+    required this.clock,
+    String staffName = 'You',
+    bool poll = true,
+    this.fastPoll = const Duration(seconds: 10),
+    this.slowPoll = const Duration(seconds: 30),
+  }) : _reports = DemoOperationsRepository(clock: clock, staffName: staffName, autoOfferAfterCheckIn: null) {
+    _shifts = _Feed(_loadShifts);
+    _eligibility = _Feed(() async => _eligibilityOf(await _get('/api/me/eligibility')));
+    _offers = _Feed(() async => [for (final o in await _get('/api/me/task-offers', {'status': 'ALL'}) as List) _offerOf(o as Map)]);
+    _tasks = _Feed(() async => [
+          for (final t in await _get('/api/me/tasks', {'status': 'ACCEPTED,IN_PROGRESS,SUBMITTED,VERIFIED'}) as List) _taskOf(t as Map),
+        ]);
+    _notifications = _Feed(() async => [for (final n in await _get('/api/me/notifications') as List) _notificationOf(n as Map)]);
+    _swaps = _Feed(() async => [for (final r in await _get('/api/me/swap-requests') as List) _swapOf(r as Map)]);
+    _offersSub = _offers._controller.stream.listen(_deliverOffers);
+    _notesSub = _notifications._controller.stream.listen(_followNotifications);
+    if (poll) {
+      unawaited(refresh());
+      _timers.add(Timer.periodic(fastPoll, (_) => _refreshFast()));
+      _timers.add(Timer.periodic(slowPoll, (_) {
+        _shifts.refresh();
+        _swaps.refresh();
+      }));
+    }
+  }
+
+  final Dio _dio;
+  final DateTime Function() clock;
+  final Duration fastPoll;
+  final Duration slowPoll;
+  final DemoOperationsRepository _reports;
+
+  late final _Feed<List<Shift>> _shifts;
+  late final _Feed<Eligibility> _eligibility;
+  late final _Feed<List<TaskOffer>> _offers;
+  late final _Feed<List<StaffTask>> _tasks;
+  late final _Feed<List<AppNotification>> _notifications;
+  late final _Feed<List<ShiftSwapRequest>> _swaps;
+  final _incoming = StreamController<TaskOffer>.broadcast();
+  final _timers = <Timer>[];
+  late final StreamSubscription<List<TaskOffer>> _offersSub;
+  late final StreamSubscription<List<AppNotification>> _notesSub;
+
+  /// Last delivered attempt and priority per open offer, so a re-offer or escalation alerts again.
+  final _alerted = <String, String>{};
+  Set<String>? _seenNotes;
+
+  // ------------------------------------------------------------------ plumbing
+
+  Future<Object?> _get(String path, [Map<String, Object?>? query]) => _call(() => _dio.get<Object?>(path, queryParameters: query));
+
+  Future<Object?> _post(String path, [Object? body]) => _call(() => _dio.post<Object?>(path, data: body ?? const <String, Object?>{}));
+
+  /// Runs a request; failures surface as [ApiException] whose [toString] is the server's message.
+  Future<Object?> _call(Future<Response<Object?>> Function() send) async {
+    try {
+      return (await send()).data;
+    } on DioException catch (e) {
+      throw _Failure(ApiException.fromDio(e));
+    }
+  }
+
+  void _refreshFast() {
+    _offers.refresh();
+    _eligibility.refresh();
+    _tasks.refresh();
+    _notifications.refresh();
+  }
+
+  @override
+  Future<void> refresh() => Future.wait([
+        _shifts.refresh(),
+        _eligibility.refresh(),
+        _offers.refresh(),
+        _tasks.refresh(),
+        _notifications.refresh(),
+        _swaps.refresh(),
+      ]);
+
+  /// Puts an offer in front of the staff member when it first arrives, is offered again, or escalates.
+  void _deliverOffers(List<TaskOffer> offers) {
+    for (final o in offers) {
+      if (!o.isOpen) {
+        _alerted.remove(o.offerId);
+        continue;
+      }
+      final key = '${o.attempt}|${o.priority.name}';
+      if (_alerted[o.offerId] == key) continue;
+      _alerted[o.offerId] = key;
+      _incoming.add(o);
+    }
+  }
+
+  /// Shift and swap notifications mean the schedule changed: reload it now instead of in 30 s.
+  void _followNotifications(List<AppNotification> notes) {
+    final seen = _seenNotes;
+    _seenNotes = {for (final n in notes) n.id};
+    if (seen == null) return;
+    final fresh = notes.where((n) => !seen.contains(n.id));
+    if (fresh.any((n) => n.kind == NotificationKind.swapUpdated || n.kind == NotificationKind.shiftChanged)) {
+      _shifts.refresh();
+      _swaps.refresh();
+    }
+  }
+
+  static String _date(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  Future<List<Shift>> _loadShifts() async {
+    final now = clock();
+    final today = DateTime(now.year, now.month, now.day);
+    // From Monday, so the week strip shows earlier days of this week, to two weeks ahead.
+    final from = today.subtract(Duration(days: now.weekday - 1));
+    final data = await _get('/api/me/shifts', {'from': _date(from), 'to': _date(today.add(const Duration(days: 14)))});
+    return [for (final s in data as List) _shiftOf(s as Map)]..sort((a, b) => a.start.compareTo(b.start));
+  }
+
+  // ------------------------------------------------------------------- mapping
+
+  /// The API returns UTC; a value without an offset is UTC too. Screens work in local time.
+  static DateTime _time(Object? value) {
+    final text = value as String;
+    final hasOffset = RegExp(r'(Z|[+-]\d\d:?\d\d)$').hasMatch(text);
+    return DateTime.parse(hasOffset ? text : '${text}Z').toLocal();
+  }
+
+  static DateTime? _timeOrNull(Object? value) => value == null ? null : _time(value);
+
+  static Severity _severity(Object? value) => switch ('$value'.toUpperCase()) {
+        'CRITICAL' || 'HIGH' => Severity.critical,
+        'WARNING' || 'MEDIUM' => Severity.warning,
+        _ => Severity.info,
+      };
+
+  static TaskOrigin _origin(Object? value) => switch (value) {
+        'INCIDENT' => TaskOrigin.incident,
+        'STAFF_REPORT' => TaskOrigin.staffReport,
+        'MANUAL' => TaskOrigin.manual,
+        _ => TaskOrigin.operationalEvent,
+      };
+
+  static String _zones(Object? zones) {
+    final names = [for (final z in (zones as List?) ?? const []) (z as Map)['zoneName'] as String];
+    return names.isEmpty ? 'No zone assigned' : names.join(', ');
+  }
+
+  static Shift _shiftOf(Map json) => Shift(
+        shiftId: json['shiftAssignmentId'] as String,
+        start: _time(json['startsAt']),
+        end: _time(json['endsAt']),
+        label: json['shiftName'] as String,
+        zoneName: _zones(json['zones']),
+        checkedInAt: _timeOrNull(json['checkInAt']),
+        checkInOpensAt: _timeOrNull(json['checkInOpensAt']),
+      );
+
+  static Eligibility _eligibilityOf(Object? data) {
+    final json = data as Map;
+    final checkedIn = json['checkedIn'] as bool;
+    return Eligibility(
+      checkedIn: checkedIn,
+      activeTasks: json['activeTasks'] as int,
+      limit: (json['maxActiveTasks'] as int?) ?? Eligibility.workloadLimit,
+      zoneName: checkedIn ? _zones(json['zones']) : null,
+    );
+  }
+
+  static String _number(num value) => value == value.roundToDouble() ? value.toInt().toString() : value.toStringAsFixed(1);
+
+  /// "7 people" from the event's metric value and unit; empty when the task has no measurement.
+  static String _measurement(Map json) {
+    final value = json['metricValue'] as num?;
+    if (value == null) return '';
+    return [_number(value), json['measurementUnit'] as String?].whereType<String>().where((s) => s.isNotEmpty).join(' ');
+  }
+
+  static TaskOffer _offerOf(Map json) {
+    final createdAt = _time(json['createdAt']);
+    final attempt = json['attempt'] as int;
+    final closedReason = json['closedReason'] as String?;
+    final status = switch (json['status']) {
+      'OFFERED' => OfferStatus.open,
+      'ACCEPTED' => OfferStatus.accepted,
+      'DECLINED' => OfferStatus.declined,
+      'EXPIRED' => OfferStatus.escalated,
+      _ => switch (closedReason) {
+          'TAKEN_BY_OTHER' => OfferStatus.takenByOther,
+          'EVENT_CLEARED' => OfferStatus.eventCleared,
+          _ => OfferStatus.withdrawn,
+        },
+    };
+    return TaskOffer(
+      offerId: json['offerId'] as String,
+      origin: _origin(json['origin']),
+      sourceCode: json['sourceCode'] as String,
+      eventTypeCode: json['eventTypeCode'] as String?,
+      title: json['title'] as String,
+      priority: _severity(json['priority']),
+      zoneName: json['zoneName'] as String,
+      location: (json['cameraName'] as String?) ?? '',
+      measurement: _measurement(json),
+      instructions: (json['instructions'] as String?) ?? '',
+      createdAt: createdAt,
+      recipients: (json['recipients'] as int?) ?? 1,
+      attempt: attempt,
+      maxAttempts: (json['maxAttempts'] as int?) ?? TaskOffer.defaultMaxAttempts,
+      nextAlertAt: _timeOrNull(json['nextAlertAt']) ?? createdAt.add(TaskOffer.realertInterval * attempt),
+      status: status,
+      cameraCode: json['cameraCode'] as String?,
+      eventClearedAt: _timeOrNull(json['eventClearedAt']),
+    );
+  }
+
+  static StaffTask _taskOf(Map json) {
+    final createdAt = _time(json['createdAt']);
+    return StaffTask(
+      taskId: json['taskId'] as String,
+      origin: _origin(json['origin']),
+      sourceCode: json['sourceCode'] as String,
+      eventTypeCode: json['eventTypeCode'] as String?,
+      title: json['title'] as String,
+      priority: _severity(json['priority']),
+      raisedFrom: json['raisedFrom'] == null ? null : _severity(json['raisedFrom']),
+      zoneName: json['zoneName'] as String,
+      location: '',
+      instructions: (json['instructions'] as String?) ?? '',
+      createdAt: createdAt,
+      acceptedAt: _timeOrNull(json['acceptedAt']) ?? _timeOrNull(json['assignedAt']) ?? createdAt,
+      status: switch (json['status']) {
+        'ACCEPTED' => TaskStatus.accepted,
+        'IN_PROGRESS' => TaskStatus.inProgress,
+        _ => TaskStatus.done,
+      },
+      plannedStartAt: _timeOrNull(json['plannedStartAt']),
+      startedAt: _timeOrNull(json['startedAt']),
+      cameraCode: json['cameraCode'] as String?,
+      eventClearedAt: _timeOrNull(json['eventClearedAt']),
+    );
+  }
+
+  static NotificationKind _kind(String type) => switch (type) {
+        'TASK_OFFER' => NotificationKind.taskOffered,
+        'TASK_ASSIGNED' => NotificationKind.taskAccepted,
+        'TASK_OFFER_WITHDRAWN' => NotificationKind.offerTaken,
+        'TASK_NEEDS_ASSIGNMENT' => NotificationKind.offerEscalated,
+        'TASK_PRIORITY_RAISED' => NotificationKind.eventEscalated,
+        'EVENT_CLEARED' => NotificationKind.eventCleared,
+        _ when type.startsWith('SWAP_') => NotificationKind.swapUpdated,
+        _ when type.startsWith('SHIFT_') => NotificationKind.shiftChanged,
+        _ => NotificationKind.general,
+      };
+
+  static AppNotification _notificationOf(Map json) => AppNotification(
+        id: json['notificationId'] as String,
+        kind: _kind(json['type'] as String),
+        title: json['title'] as String,
+        body: json['message'] as String,
+        createdAt: _time(json['createdAt']),
+        severity: json['severity'] == null ? null : _severity(json['severity']),
+        taskId: json['taskId'] as String?,
+        read: json['readAt'] != null,
+      );
+
+  static SwapShift _swapShiftOf(Map json) => SwapShift(
+        shiftId: json['shiftAssignmentId'] as String,
+        ownerId: json['userId'] as String,
+        label: json['shiftName'] as String,
+        start: _time(json['startsAt']),
+        end: _time(json['endsAt']),
+        zoneName: _zones(json['zones']),
+      );
+
+  static String? _name(Object? person) => person == null ? null : (person as Map)['fullName'] as String;
+
+  static ShiftSwapRequest _swapOf(Object? data) {
+    final json = data as Map;
+    final requester = json['requester'] as Map;
+    final target = json['target'] as Map?;
+    return ShiftSwapRequest(
+      requestId: json['swapRequestId'] as String,
+      type: SwapType.fromCode(json['type'] as String?),
+      status: SwapStatus.fromCode(json['status'] as String),
+      requesterId: requester['userId'] as String,
+      requesterName: requester['fullName'] as String,
+      requesterShift: _swapShiftOf(json['requesterShift'] as Map),
+      targetId: target?['userId'] as String?,
+      targetName: target?['fullName'] as String?,
+      targetShift: json['targetShift'] == null ? null : _swapShiftOf(json['targetShift'] as Map),
+      reason: SwapReason.fromCode(json['reasonCode'] as String?),
+      note: (json['note'] as String?) ?? '',
+      submittedAt: _time(json['createdAt']),
+      expiresAt: _timeOrNull(json['expiresAt']),
+      targetRespondedAt: _timeOrNull(json['targetRespondedAt']),
+      decidedBy: _name(json['decidedBy']),
+      decidedAt: _timeOrNull(json['decidedAt']),
+      decisionNote: json['decisionNote'] as String?,
+      cancelledBy: _name(json['cancelledBy']),
+      cancelledAt: _timeOrNull(json['cancelledAt']),
+      cancellationReason: json['cancellationReason'] as String?,
+      sentByMe: json['viewerRole'] == 'REQUESTER',
+      canCancel: json['canCancel'] as bool? ?? false,
+      canRespond: json['canRespond'] as bool? ?? false,
+    );
+  }
+
+  static SwapCandidates _candidatesOf(Object? data) {
+    final json = data as Map;
+    return SwapCandidates(
+      shiftId: json['shiftAssignmentId'] as String,
+      type: SwapType.fromCode(json['type'] as String?),
+      deadline: _time(json['deadline']),
+      hiddenCount: json['hiddenCount'] as int,
+      candidates: [
+        for (final c in json['candidates'] as List)
+          SwapCandidate(
+            userId: ((c as Map)['colleague'] as Map)['userId'] as String,
+            fullName: (c['colleague'] as Map)['fullName'] as String,
+            shift: c['shift'] == null ? null : _swapShiftOf(c['shift'] as Map),
+            weeklyHoursAfter: (c['weeklyHoursAfter'] as num).toDouble(),
+          ),
+      ],
+    );
+  }
+
+  // -------------------------------------------------------------------- shifts
+
+  @override
+  Stream<List<Shift>> watchShifts() => _shifts.stream;
+
+  @override
+  Stream<Eligibility> watchEligibility() => _eligibility.stream;
+
+  @override
+  Future<Shift> checkIn(String shiftId) async {
+    try {
+      final shift = _shiftOf(await _post('/api/me/shifts/$shiftId/check-in') as Map);
+      final current = _shifts.value;
+      if (current != null) _shifts.value = [for (final s in current) s.shiftId == shiftId ? shift : s];
+      unawaited(_eligibility.refresh());
+      return shift;
+    } on _Failure catch (f) {
+      if (f.code == 'CHECK_IN_TOO_EARLY') {
+        final shift = _shifts.value?.where((s) => s.shiftId == shiftId).firstOrNull;
+        throw CheckInTooEarly(shift?.checkInOpensAt ?? clock());
+      }
+      throw OperationFailed(f.message);
+    }
+  }
+
+  // --------------------------------------------------------------------- swaps
+
+  @override
+  Stream<List<ShiftSwapRequest>> watchSwapRequests() => _swaps.stream;
+
+  /// Every swap refusal (rules, deadline, state) is shown to the staff member as is.
+  Future<T> _swapCall<T>(Future<T> Function() body) async {
+    try {
+      return await body();
+    } on _Failure catch (f) {
+      throw SwapNotAllowed(f.message);
+    }
+  }
+
+  /// Puts [request] at the top of the cached list right away, then reloads in the background.
+  ShiftSwapRequest _keep(ShiftSwapRequest request) {
+    final current = _swaps.value ?? const <ShiftSwapRequest>[];
+    _swaps.value = [request, for (final r in current) if (r.requestId != request.requestId) r];
+    unawaited(_swaps.refresh());
+    return request;
+  }
+
+  @override
+  Future<SwapCandidates> swapCandidates(String shiftId, SwapType type) =>
+      _swapCall(() async => _candidatesOf(await _get('/api/me/shifts/$shiftId/swap-candidates', {'type': type.code})));
+
+  @override
+  Future<ShiftSwapRequest> requestShiftSwap({
+    required String shiftId,
+    required SwapType type,
+    required String targetUserId,
+    String? targetShiftId,
+    SwapReason? reason,
+    String note = '',
+  }) =>
+      _swapCall(() async => _keep(_swapOf(await _post('/api/swap-requests', {
+            'requesterShiftAssignmentId': shiftId,
+            'type': type.code,
+            'targetUserId': targetUserId,
+            'targetShiftAssignmentId': type == SwapType.swap ? targetShiftId : null,
+            'reasonCode': reason?.code,
+            'note': note.trim().isEmpty ? null : note.trim(),
+          }))));
+
+  @override
+  Future<ShiftSwapRequest> respondToSwap(String requestId, {required bool accept}) =>
+      _swapCall(() async => _keep(_swapOf(await _post('/api/swap-requests/$requestId/respond', {'accept': accept}))));
+
+  @override
+  Future<ShiftSwapRequest> cancelSwap(String requestId, {String? reason}) =>
+      _swapCall(() async => _keep(_swapOf(await _post('/api/swap-requests/$requestId/cancel', {'reason': reason}))));
+
+  // -------------------------------------------------------------------- offers
+
+  @override
+  Stream<TaskOffer> incomingOffers() => _incoming.stream;
+
+  @override
+  Stream<List<TaskOffer>> watchOpenOffers() => _offers.stream.map((all) => all.where((o) => o.isOpen).toList());
+
+  @override
+  Stream<TaskOffer?> watchOffer(String offerId) => _offers.stream.map((all) => all.where((o) => o.offerId == offerId).firstOrNull);
+
+  /// "Lan accepted this task at 2026-10-20T08:00:00Z." from the 409 TASK_ALREADY_TAKEN detail.
+  static TaskAlreadyTaken _taken(String detail) {
+    final match = RegExp(r'^(.*) accepted this task at (\S+?)\.?$').firstMatch(detail.trim());
+    if (match == null) return const TaskAlreadyTaken();
+    DateTime? at;
+    try {
+      at = _time(match.group(2));
+    } on FormatException {
+      at = null;
+    }
+    return TaskAlreadyTaken(takenBy: match.group(1), takenAt: at);
+  }
+
+  @override
+  Future<StaffTask?> respondToOffer(String offerId, TaskResponse response, {Duration? handleAfter, DeclineReason? reason}) async {
+    if (response == TaskResponse.cannotHandle && reason == null) {
+      throw ArgumentError('Cannot Handle needs a reason (BR-24).');
+    }
+    try {
+      final result = await _post('/api/task-offers/$offerId/respond', {
+        'response': switch (response) {
+          TaskResponse.handleNow => 'HANDLE_NOW',
+          TaskResponse.handleLater => 'HANDLE_LATER',
+          TaskResponse.cannotHandle => 'CANNOT_HANDLE',
+        },
+        'plannedStartAt': response == TaskResponse.handleLater
+            ? clock().add(handleAfter ?? const Duration(minutes: 10)).toUtc().toIso8601String()
+            : null,
+        'reason': reason?.label,
+      }) as Map;
+      final task = result['task'] == null ? null : _taskOf(result['task'] as Map);
+      if (task != null) {
+        final current = _tasks.value ?? const <StaffTask>[];
+        _tasks.value = [task, for (final t in current) if (t.taskId != task.taskId) t];
+      }
+      _refreshFast();
+      return task;
+    } on _Failure catch (f) {
+      unawaited(_offers.refresh());
+      throw switch (f.code) {
+        'TASK_ALREADY_TAKEN' => _taken(f.message),
+        'OFFER_CLOSED' => const OfferNoLongerOpen(),
+        'WORKLOAD_LIMIT' => const WorkloadLimitReached(),
+        _ => OperationFailed(f.message),
+      };
+    }
+  }
+
+  // --------------------------------------------------------------------- tasks
+
+  @override
+  Stream<List<StaffTask>> watchTasks() => _tasks.stream;
+
+  @override
+  Future<StaffTask> startTask(String taskId) async {
+    try {
+      final task = _taskOf(await _post('/api/tasks/$taskId/start') as Map);
+      final current = _tasks.value ?? const <StaffTask>[];
+      _tasks.value = [for (final t in current) t.taskId == taskId ? task : t];
+      return task;
+    } on _Failure catch (f) {
+      unawaited(_tasks.refresh());
+      throw OperationFailed(f.message);
+    }
+  }
+
+  // ------------------------------------------------------------- notifications
+
+  @override
+  Stream<List<AppNotification>> watchNotifications() => _notifications.stream;
+
+  @override
+  Future<void> markAllRead() async {
+    final current = _notifications.value;
+    if (current != null) _notifications.value = [for (final n in current) n.read ? n : n.markRead()];
+    try {
+      await _post('/api/me/notifications/read-all');
+    } on _Failure {
+      // The next poll shows what the server still has unread.
+    }
+    unawaited(_notifications.refresh());
+  }
+
+  // ------------------------------------------------------------------- reports
+
+  @override
+  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false}) =>
+      _reports.extractReport(note, photoPaths, fromVoice: fromVoice);
+
+  @override
+  Future<ReportReceipt> submitReport(ReportDraft draft) async {
+    final receipt = await _reports.submitReport(draft);
+    return ReportReceipt(
+      reportCode: receipt.reportCode,
+      outcome: receipt.outcome,
+      incidentCode: receipt.incidentCode,
+      title: receipt.title,
+      location: receipt.location,
+      zoneName: receipt.zoneName,
+      offeredTo: receipt.offeredTo,
+      submittedAt: receipt.submittedAt,
+      edited: receipt.edited,
+      preview: true,
+    );
+  }
+
+  void dispose() {
+    for (final t in _timers) {
+      t.cancel();
+    }
+    _offersSub.cancel();
+    _notesSub.cancel();
+    _incoming.close();
+    for (final feed in [_shifts, _eligibility, _offers, _tasks, _notifications, _swaps]) {
+      feed.close();
+    }
+    _reports.dispose();
+  }
+}
+
+/// A failed call inside this repository, before it is turned into a domain exception.
+class _Failure implements Exception {
+  _Failure(this.error);
+  final ApiException error;
+  String? get code => error.code;
+  String get message => error.message;
+
+  @override
+  String toString() => error.message;
+}

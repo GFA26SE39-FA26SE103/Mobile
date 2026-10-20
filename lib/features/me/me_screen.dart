@@ -52,7 +52,7 @@ class MeScreen extends ConsumerWidget {
             Text(
               shift == null
                   ? 'No shift today.'
-                  : '${shift.zoneName} · ${shift.storeName}${shift.isCheckedIn ? '' : '. Check in to receive alerts.'}',
+                  : '${[shift.zoneName, shift.storeName].where((s) => s.isNotEmpty).join(' · ')}${shift.isCheckedIn ? '' : '. Check in to receive alerts.'}',
               style: theme.bodySmall,
             ),
           ]),
@@ -62,7 +62,7 @@ class MeScreen extends ConsumerWidget {
           AppCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Text(
-                'The backend has no Task, StaffReport or shift API yet, so these run on demo data inside the app. Swap buttons play the Operator.',
+                'Shifts, tasks, alerts and swaps run on demo data inside the app (demo sign-in or DEMO_OPS). Swap buttons play the colleague and the Manager.',
                 style: theme.bodySmall,
               ),
               const SizedBox(height: 12),
@@ -93,18 +93,24 @@ class MeScreen extends ConsumerWidget {
               Row(children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => report(demo.decideLatestSwap(approve: true), 'Operator approved your swap request.'),
-                    child: const Text('Approve swap'),
+                    onPressed: () => report(demo.advanceLatestSwap(approve: true), 'The latest swap request moved one step forward.'),
+                    child: const Text('Accept swap step'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => report(demo.decideLatestSwap(approve: false), 'Operator declined your swap request.'),
-                    child: const Text('Decline swap'),
+                    onPressed: () => report(demo.advanceLatestSwap(approve: false), 'The latest swap request was turned down.'),
+                    child: const Text('Turn down'),
                   ),
                 ),
               ]),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => report(demo.receiveSwapRequest(), 'A colleague asked to swap one of your shifts.'),
+                icon: const Icon(Icons.swap_horiz),
+                label: const Text('Receive a swap request'),
+              ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: () {
@@ -124,7 +130,9 @@ class MeScreen extends ConsumerWidget {
             ListTile(
               leading: Icon(Icons.dns_outlined, color: c.textMuted),
               title: const Text('Server'),
-              subtitle: Text(AppConfig.mockAuth ? 'Demo sign-in (no server)' : AppConfig.apiUrl),
+              subtitle: Text(AppConfig.mockAuth
+                  ? 'Demo sign-in (no server)'
+                  : '${AppConfig.apiUrl}${AppConfig.demoOperations ? ' · shifts and tasks on demo data' : ''}'),
             ),
             Divider(height: 1, color: c.border),
             ListTile(

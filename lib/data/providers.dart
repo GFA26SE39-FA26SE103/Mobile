@@ -1,19 +1,28 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/config.dart';
 import '../core/providers.dart';
 import '../features/auth/auth_controller.dart';
 import 'demo_operations_repository.dart';
+import 'http_operations_repository.dart';
 import 'models.dart';
 import 'operations_repository.dart';
 
 /// One repository per signed-in user, so a new account never sees the previous one's tasks.
 final operationsRepositoryProvider = Provider<OperationsRepository>((ref) {
   // Keyed on the user id only: re-verifying the same account must not wipe today's state.
-  ref.watch(authControllerProvider.select((s) => s.session?.user.userId));
+  final userId = ref.watch(authControllerProvider.select((s) => s.session?.user.userId));
   final fullName = ref.read(authControllerProvider).session?.user.fullName.trim() ?? '';
   // Vietnamese names put the given name last ("Nguyễn Linh" → "Linh").
   final firstName = fullName.isEmpty ? 'You' : fullName.split(RegExp(r'\s+')).last;
-  final repo = DemoOperationsRepository(clock: ref.watch(clockProvider), staffName: firstName);
+  final clock = ref.watch(clockProvider);
+  if (AppConfig.demoOperations) {
+    final repo = DemoOperationsRepository(clock: clock, staffName: firstName);
+    ref.onDispose(repo.dispose);
+    return repo;
+  }
+  // Signed out there is nothing to poll; the next sign-in builds a new repository.
+  final repo = HttpOperationsRepository(ref.watch(dioProvider), clock: clock, staffName: firstName, poll: userId != null);
   ref.onDispose(repo.dispose);
   return repo;
 });
@@ -58,12 +67,22 @@ final todayShiftProvider = Provider<Shift?>((ref) {
   return null;
 });
 
-/// The latest swap request for each shift.
+/// The latest request I sent for each of my shifts.
 final swapByShiftProvider = Provider<Map<String, ShiftSwapRequest>>((ref) {
   final requests = ref.watch(swapRequestsProvider).valueOrNull ?? const [];
   final map = <String, ShiftSwapRequest>{};
   for (final r in requests) {
-    map.putIfAbsent(r.shiftId, () => r);
+    if (r.sentByMe) map.putIfAbsent(r.shiftId, () => r);
   }
   return map;
 });
+
+/// Requests colleagues sent me that still wait for my answer.
+final swapsAwaitingMeProvider = Provider<int>(
+  (ref) => ref.watch(swapRequestsProvider).valueOrNull?.where((r) => r.canRespond).length ?? 0,
+);
+
+/// Colleagues who can take one of my shifts; reloaded each time the screen asks.
+final swapCandidatesProvider = FutureProvider.autoDispose.family<SwapCandidates, (String, SwapType)>(
+  (ref, key) => ref.watch(operationsRepositoryProvider).swapCandidates(key.$1, key.$2),
+);

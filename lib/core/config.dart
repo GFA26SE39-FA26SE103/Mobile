@@ -11,7 +11,8 @@ class AppConfig {
   /// Signs in against the in-app demo backend instead of `/api/auth/login`.
   static const mockAuth = bool.fromEnvironment('MOCK_AUTH');
 
-  /// Shifts, alerts, tasks and reports have no backend API yet (MF-02 is not
-  /// implemented server-side), so they always run on the in-app demo backend.
-  static const mf02Demo = true;
+  /// Runs shifts, task offers, tasks, alerts and swaps on the in-app demo backend instead of
+  /// the API (`--dart-define=DEMO_OPS=true`). Demo sign-in always uses it, since its token is
+  /// not valid on a server. Staff reports stay in-app either way until the API has them.
+  static const demoOperations = mockAuth || bool.fromEnvironment('DEMO_OPS');
 }

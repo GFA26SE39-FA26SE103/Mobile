@@ -8,6 +8,7 @@ import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../shared/format.dart';
 import '../../shared/widgets.dart';
+import 'swap_screens.dart';
 
 class MyShiftsScreen extends ConsumerStatefulWidget {
   const MyShiftsScreen({super.key});
@@ -32,6 +33,8 @@ class _MyShiftsScreenState extends ConsumerState<MyShiftsScreen> {
       setState(() => _checkInError = 'Check-in opens at ${hm(e.opensAt)}, 15 minutes before your shift.');
     } on StateError catch (e) {
       setState(() => _checkInError = e.message);
+    } on OperationFailed catch (e) {
+      setState(() => _checkInError = e.message);
     } finally {
       if (mounted) setState(() => _checkingIn = false);
     }
@@ -43,14 +46,48 @@ class _MyShiftsScreenState extends ConsumerState<MyShiftsScreen> {
     final shifts = ref.watch(shiftsProvider);
     final today = ref.watch(todayShiftProvider);
     final swaps = ref.watch(swapByShiftProvider);
+    final awaiting = ref.watch(swapsAwaitingMeProvider);
+    // Open requests colleagues sent me, by the shift of mine they would take.
+    final incoming = {
+      for (final r in ref.watch(swapRequestsProvider).valueOrNull ?? const <ShiftSwapRequest>[])
+        if (!r.sentByMe && r.status.isOpen && r.targetShift != null) r.targetShift!.shiftId: r,
+    };
+    final repo = ref.read(operationsRepositoryProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('My shifts')),
+      appBar: AppBar(title: const Text('My shifts'), actions: [
+        IconButton(
+          tooltip: 'Swap requests',
+          onPressed: () => context.go('/shifts/swaps'),
+          icon: Badge(isLabelVisible: awaiting > 0, label: Text('$awaiting'), child: const Icon(Icons.swap_horiz)),
+        ),
+        const SizedBox(width: 8),
+      ]),
       body: shifts.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load shifts: $e')),
+        error: (e, _) => EmptyState(
+          icon: Icons.cloud_off_outlined,
+          title: 'Could not load shifts',
+          body: '$e',
+          action: OutlinedButton(onPressed: repo.refresh, child: const Text('Try again')),
+        ),
         data: (all) {
           final upcoming = all.where((s) => s != today && s.start.isAfter(now)).toList()..sort((a, b) => a.start.compareTo(b.start));
-          return ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 28), children: [
+          return RefreshIndicator(
+            onRefresh: repo.refresh,
+            child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 28), children: [
+            if (awaiting > 0) ...[
+              InfoBanner(
+                tone: BannerTone.danger,
+                icon: Icons.swap_horiz,
+                title: '$awaiting swap request${awaiting == 1 ? '' : 's'} waiting for your answer',
+                action: TextButton(
+                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 36)),
+                  onPressed: () => context.go('/shifts/swaps'),
+                  child: const Text('Open requests'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             _WeekStrip(now: now, shifts: all),
             const SizedBox(height: 16),
             if (today != null)
@@ -72,11 +109,12 @@ class _MyShiftsScreenState extends ConsumerState<MyShiftsScreen> {
                 child: Column(children: [
                   for (var i = 0; i < upcoming.length; i++) ...[
                     if (i > 0) Divider(height: 1, color: context.colors.border),
-                    _UpcomingRow(shift: upcoming[i], swap: swaps[upcoming[i].shiftId]),
+                    _UpcomingRow(shift: upcoming[i], swap: swaps[upcoming[i].shiftId], incoming: incoming[upcoming[i].shiftId]),
                   ],
                 ]),
               ),
-          ]);
+          ]),
+          );
         },
       ),
     );
@@ -172,7 +210,7 @@ class _TodayCard extends StatelessWidget {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(shift.zoneName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-              Text('${shift.floorName} · ${shift.zoneDetail}', style: theme.bodySmall),
+              if (shift.placeDetail.isNotEmpty) Text(shift.placeDetail, style: theme.bodySmall),
               if (shift.teammates.isNotEmpty) Text('With ${shift.teammates.join(', ')}', style: theme.bodySmall),
             ]),
           ),
@@ -202,16 +240,21 @@ class _TodayCard extends StatelessWidget {
 }
 
 class _UpcomingRow extends StatelessWidget {
-  const _UpcomingRow({required this.shift, this.swap});
+  const _UpcomingRow({required this.shift, this.swap, this.incoming});
   final Shift shift;
+
+  /// My latest request for this shift, and an open request a colleague sent me for it.
   final ShiftSwapRequest? swap;
+  final ShiftSwapRequest? incoming;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final pending = swap?.status == SwapStatus.pending;
+    final pending = swap?.status.isOpen ?? false;
+    final shown = incoming ?? (swap?.status == SwapStatus.cancelled ? null : swap);
+    final pill = shown == null ? null : swapPill(context, shown);
     return InkWell(
-      onTap: () => context.go('/shifts/${shift.shiftId}/swap'),
+      onTap: () => context.go(incoming != null ? '/shifts/swaps/${incoming!.requestId}' : '/shifts/${shift.shiftId}/swap'),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
         child: Row(children: [
@@ -219,14 +262,7 @@ class _UpcomingRow extends StatelessWidget {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('${shift.label} · ${timeRange(shift.start, shift.end)}'),
-              if (swap != null) ...[
-                const SizedBox(height: 4),
-                switch (swap!.status) {
-                  SwapStatus.pending => Pill(label: 'Swap: waiting for Operator', fg: c.warning, bg: c.warningTint, dot: true),
-                  SwapStatus.rejected => Pill(label: 'Swap declined', fg: c.danger, bg: c.dangerTint),
-                  SwapStatus.approved => Pill(label: 'Swap approved', fg: c.success, bg: c.successTint),
-                },
-              ],
+              if (pill != null) ...[const SizedBox(height: 4), pill],
             ]),
           ),
           Pill(label: shift.zoneName.split(' · ').first, fg: c.primary, bg: c.primaryTint),
@@ -270,7 +306,7 @@ class CheckedInScreen extends ConsumerWidget {
             const SizedBox(height: 4),
             Text('${shift.label} shift · ${timeRange(shift.start, shift.end)}', style: const TextStyle(fontWeight: FontWeight.w500)),
             const SizedBox(height: 2),
-            Text('Checked in at ${hm(shift.checkedInAt!)} · ${shift.storeName}', style: theme.bodySmall),
+            Text('Checked in at ${hm(shift.checkedInAt!)}${shift.storeName.isEmpty ? '' : ' · ${shift.storeName}'}', style: theme.bodySmall),
           ]),
         ),
         const SizedBox(height: 12),
@@ -285,175 +321,20 @@ class CheckedInScreen extends ConsumerWidget {
                 style: theme.bodySmall),
           ]),
         ),
-        const SizedBox(height: 12),
-        AppCard(
-          child: FactLine(icon: Icons.groups_outlined, text: 'You + ${shift.teammates.join(', ')} · ${shift.zoneDetail}', strong: true),
-        ),
+        if (shift.teammates.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          AppCard(
+            child: FactLine(
+              icon: Icons.groups_outlined,
+              text: ['You + ${shift.teammates.join(', ')}', shift.zoneDetail].where((s) => s.isNotEmpty).join(' · '),
+              strong: true,
+            ),
+          ),
+        ],
         const SizedBox(height: 24),
         FilledButton(onPressed: () => context.go('/tasks'), child: const Text('View my tasks')),
         const SizedBox(height: 4),
         TextButton(onPressed: () => context.go('/shifts'), child: const Text('Back to my shifts')),
-      ]),
-    );
-  }
-}
-
-/// Staff asks for a future shift to be swapped; the Operator approves and picks a replacement
-/// from staff the system finds available (no direct Staff-to-Staff negotiation).
-class SwapRequestScreen extends ConsumerStatefulWidget {
-  const SwapRequestScreen({super.key, required this.shiftId});
-  final String shiftId;
-
-  @override
-  ConsumerState<SwapRequestScreen> createState() => _SwapRequestScreenState();
-}
-
-class _SwapRequestScreenState extends ConsumerState<SwapRequestScreen> {
-  final _note = TextEditingController();
-  SwapReason? _reason;
-  bool _sending = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _note.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_reason == null) {
-      setState(() => _error = 'Choose a reason for the swap.');
-      return;
-    }
-    setState(() {
-      _sending = true;
-      _error = null;
-    });
-    try {
-      await ref.read(operationsRepositoryProvider).requestShiftSwap(widget.shiftId, _reason!, _note.text);
-    } on SwapNotAllowed catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final theme = Theme.of(context).textTheme;
-    final now = ref.watch(clockProvider)();
-    final shift = ref.watch(shiftsProvider).valueOrNull?.where((s) => s.shiftId == widget.shiftId).firstOrNull;
-    final swap = ref.watch(swapByShiftProvider)[widget.shiftId];
-    if (shift == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Shift swap')),
-        body: EmptyState(
-          icon: Icons.event_busy,
-          title: 'Shift no longer yours',
-          body: swap?.status == SwapStatus.approved ? '${swap!.replacement} now covers this shift.' : 'This shift is not on your schedule.',
-          action: OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Back to my shifts')),
-        ),
-      );
-    }
-    final summary = AppCard(
-      child: Row(children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(color: c.primaryTint, borderRadius: BorderRadius.circular(12)),
-          child: Icon(Icons.event_outlined, color: c.primary),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${dayShort(shift.start)} · ${shift.label}', style: theme.titleMedium),
-            Text('${timeRange(shift.start, shift.end)} · ${shift.zoneName}', style: theme.bodySmall),
-          ]),
-        ),
-      ]),
-    );
-
-    if (swap != null && swap.status != SwapStatus.rejected) {
-      final approved = swap.status == SwapStatus.approved;
-      return Scaffold(
-        appBar: AppBar(title: const Text('Shift swap')),
-        body: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 28), children: [
-          summary,
-          const SizedBox(height: 12),
-          InfoBanner(
-            tone: approved ? BannerTone.success : BannerTone.warning,
-            icon: approved ? Icons.check_circle_outline : Icons.hourglass_top,
-            title: approved ? 'Swap approved' : 'Request sent · waiting for the Operator',
-            body: approved
-                ? '${swap.replacement} covers this shift.'
-                : 'The Operator picks a replacement from staff the system finds available. Keep this shift until the request is approved.',
-          ),
-          const SizedBox(height: 12),
-          AppCard(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('REASON', style: theme.labelSmall),
-              const SizedBox(height: 4),
-              Text(swap.reason.label, style: const TextStyle(fontWeight: FontWeight.w600)),
-              if (swap.note.isNotEmpty) ...[const SizedBox(height: 4), Text(swap.note, style: theme.bodySmall)],
-              const SizedBox(height: 10),
-              Text('Sent ${dayShort(swap.submittedAt)} at ${hm(swap.submittedAt)}', style: theme.bodySmall),
-            ]),
-          ),
-          const SizedBox(height: 22),
-          OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Back to my shifts')),
-        ]),
-      );
-    }
-
-    final allowed = shift.canRequestSwapAt(now);
-    return Scaffold(
-      appBar: AppBar(title: const Text('Request a shift swap')),
-      body: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 28), children: [
-        summary,
-        if (swap?.status == SwapStatus.rejected) ...[
-          const SizedBox(height: 12),
-          InfoBanner(tone: BannerTone.danger, icon: Icons.block, title: 'Last request was declined', body: swap!.decisionNote),
-        ],
-        const SizedBox(height: 16),
-        if (!allowed)
-          const InfoBanner(
-            tone: BannerTone.warning,
-            icon: Icons.lock_clock,
-            title: 'This shift has started',
-            body: 'A shift cannot be changed after it has started. Talk to the Operator on duty.',
-          )
-        else ...[
-          Text('Why do you need a swap?', style: theme.titleMedium),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final r in SwapReason.values)
-              ChoiceChip(label: Text(r.label), selected: _reason == r, onSelected: (_) => setState(() => _reason = r)),
-          ]),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _note,
-            minLines: 2,
-            maxLines: 4,
-            maxLength: 200,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: InputDecoration(
-              hintText: _reason == SwapReason.other ? 'Required: tell the Operator why' : 'Note for the Operator (optional)',
-            ),
-          ),
-          const FactLine(
-            icon: Icons.info_outline,
-            text: 'The system checks who is free without overlapping shifts or going over working hours. The Operator picks the replacement.',
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            InfoBanner(tone: BannerTone.danger, icon: Icons.error_outline, title: _error!),
-          ],
-          const SizedBox(height: 18),
-          FilledButton(onPressed: _sending ? null : _submit, child: Text(_sending ? 'Sending…' : 'Send request')),
-        ],
-        const SizedBox(height: 10),
-        OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Back to my shifts')),
       ]),
     );
   }

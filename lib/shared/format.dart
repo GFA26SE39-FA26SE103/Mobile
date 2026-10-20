@@ -9,6 +9,10 @@ String dayShort(DateTime t) => _dayShort.format(t.toLocal());
 String dayLong(DateTime t) => _dayLong.format(t.toLocal());
 String timeRange(DateTime a, DateTime b) => '${hm(a)}–${hm(b)}';
 
+/// "Zone B · Checkout 3": the zone's short name plus the spot, when there is one.
+String place(String zoneName, String location) =>
+    [zoneName.split(' · ').first, location].where((s) => s.isNotEmpty).join(' · ');
+
 String timeAgo(DateTime then, DateTime now) {
   final d = now.difference(then);
   if (d.inMinutes < 1) return 'now';

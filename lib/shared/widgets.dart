@@ -14,7 +14,7 @@ import '../data/models.dart';
 }
 
 class Pill extends StatelessWidget {
-  const Pill({super.key, required this.label, required this.fg, required this.bg, this.dot = false, this.solid = false});
+  const Pill({super.key, required this.label, required this.fg, required this.bg, this.dot = false, this.solid = false, this.ellipsis = false});
 
   final String label;
   final Color fg;
@@ -23,6 +23,12 @@ class Pill extends StatelessWidget {
 
   /// Solid pills (white text on the colour) are reserved for urgent states.
   final bool solid;
+
+  /// Cuts a long label to fit a narrow column. Only for pills whose parent bounds the width
+  /// (a Column inside Expanded), never as a direct child of a Row.
+  final bool ellipsis;
+
+  static TextStyle _style(Color color) => TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.3);
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +42,10 @@ class Pill extends StatelessWidget {
             Container(width: 6, height: 6, decoration: BoxDecoration(color: textColor, shape: BoxShape.circle)),
             const SizedBox(width: 6),
           ],
-          Text(label, style: TextStyle(color: textColor, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+          if (ellipsis)
+            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: _style(textColor)))
+          else
+            Text(label, style: _style(textColor)),
         ]),
       ),
     );

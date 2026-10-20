@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../features/auth/auth_controller.dart';
 import '../features/auth/auth_repository.dart';
 import 'config.dart';
+import 'device_notifications.dart';
 
 /// Wall clock, overridable in tests.
 final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
@@ -41,3 +42,6 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 });
 
 final sessionStoreProvider = Provider<SessionStore>((ref) => SessionStore());
+
+/// The phone's notification shade; tests replace it with [NoopDeviceNotifier].
+final deviceNotifierProvider = Provider<DeviceNotifier>((ref) => LocalDeviceNotifier());

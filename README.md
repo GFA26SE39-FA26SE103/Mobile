@@ -5,8 +5,9 @@ Flutter app for the **STAFF** role (FA26SE103 / GFA26SE39). It covers the staff 
 qualified Incident, plus confirmed StaffReports):
 
 - Sign in (real backend `POST /api/auth/login`, `GET /api/auth/me`; staff accounts only)
-- My shifts, check-in (offers only reach checked-in staff) and **shift swap requests** that the
-  Operator approves
+- My shifts, check-in (offers only reach checked-in staff) and **shift swaps** (MF-04): pick an
+  eligible colleague to **swap** or **cover**, the colleague accepts or declines, then the Manager
+  approves; requests received from colleagues are answered under Shifts → Swap requests
 - Task offers with three responses: **Handle now**, **Accept and handle later** (planned start,
   overdue when missed) and **Cannot handle** (reason required); first acceptance wins; re-offer
   countdown (60 s × 3, then the Operator assigns)
@@ -24,18 +25,21 @@ Evidence capture, verification and rework (MF-03) are not in this increment.
 | Area | Source |
 |---|---|
 | Sign-in | Backend API. `--dart-define=MOCK_AUTH=true` signs in offline (password `staff123`). |
-| Shifts, swaps, task offers, tasks, notifications, staff reports | **In-app demo backend** (`lib/data/demo_operations_repository.dart`). The backend has no Task / StaffReport / shift API yet; the proposed contract is in [docs/API_CONTRACT.md](docs/API_CONTRACT.md). |
+| Shifts, check-in, swaps, task offers, tasks, notifications | **Backend API** (`lib/data/http_operations_repository.dart`, routes in the Back-End `docs/API.md`, MF-02 and MF-04). There is no push channel yet (FCM is not built), so offers, tasks, eligibility and notifications are polled every 10 s, shifts and swaps every 30 s; pull to refresh on My shifts and Swap requests. |
+| Phone notifications | **Local notifications** (`flutter_local_notifications`, `lib/core/device_notifications.dart`) while the app runs in the background: channel *Task offers* (heads-up, re-alerts on each re-offer and on CRITICAL, removed when the offer closes), *Task updates* and *Shifts and swaps*. Tapping one opens its screen. Nothing is shown while the app is in front, and nothing arrives once the app is closed: that needs FCM push, which the backend does not have yet. Android 13+ asks for the permission on first sign-in. |
+| Staff reports | **In-app only.** The backend has no StaffReport API yet: the AI draft runs in the app and the receipt says *Preview only: not sent*. |
+| Everything above, offline | `--dart-define=DEMO_OPS=true` (or `MOCK_AUTH=true`) runs the **in-app demo backend** (`lib/data/demo_operations_repository.dart`). |
 
 The demo backend follows the 40 BRs in Report 3 and the 10/10/2026 PROJECT_CONTEXT
 (eligibility, 2-task limit, first-accept-wins, 60 s × 3 re-offer and escalation, routine vs
-qualified reports, Operator-approved swaps) and the backend's 11/10/2026 OperationalEvent
+qualified reports, colleague-then-Manager swaps) and the backend's 11/10/2026 OperationalEvent
 episodes. **Me → Demo tools** raises an AI event task (rotating `LONG_QUEUE`,
 `CHECKOUT_CAPACITY`, `CONGESTION`, `EXCESSIVE_WAIT`), an offer someone else accepts first,
 escalates the latest WARNING event to CRITICAL (the same offer or task is updated), clears the
 latest event (an open offer is withdrawn, an accepted task stays — provisional, see open point 5
-in the contract), finishes active tasks, and approves or declines the latest swap request as the
-Operator. After check-in the first offer arrives on its own after about
-6 seconds.
+in the contract), finishes active tasks, moves the latest swap request one step (the colleague
+answers, then the Manager decides) and receives a swap request from a colleague. After check-in
+the first offer arrives on its own after about 6 seconds.
 
 ## Run
 
@@ -45,9 +49,16 @@ flutter pub get
 flutter run
 # Physical phone on the same Wi-Fi as the backend
 flutter run --dart-define=API_URL=http://192.168.1.10:5080
+# Shared Dev API (writes to the team's Dev database; sign in with a STAFF account)
+flutter run --dart-define=API_URL=https://supermarket-api-dev.kitsuracloud.com
+# Real sign-in, demo data for shifts and tasks
+flutter run --dart-define=DEMO_OPS=true
 # No backend at all
 flutter run --dart-define=MOCK_AUTH=true
 ```
+
+A Staff member only sees shifts a Manager has **published** (`POST /api/schedule/publish`), and
+only shifts more than 24 hours away can be swapped.
 
 Debug builds allow plain HTTP for the local backend (`android/app/src/debug/AndroidManifest.xml`).
 Release builds need HTTPS.
@@ -67,14 +78,14 @@ On Windows the analyzer can crash when the project path contains non-ASCII chara
 ```
 lib/
   core/        config, theme tokens (app_colors.dart), Dio client, router
-  data/        models, OperationsRepository contract, demo backend, Riverpod providers
+  data/        models, OperationsRepository contract, HTTP and demo backends, Riverpod providers
   features/
     auth/      sign in, signing-in steps, session expired
-    shifts/    my shifts, check-in, checked in, swap request
+    shifts/    my shifts, check-in, checked in; swaps: choose a colleague, progress, inbox
     alerts/    task offer sheet (3 responses), offers & notifications
     tasks/     my tasks, task detail
     report/    describe (text/voice/photo) → review AI draft → submitted; voice input
     me/        profile, demo tools, sign out
   shared/      widgets and formatting
-test/          BR rules (fake time), auth controller, whole-app flows
+test/          BR rules (fake time), auth controller, HTTP mapping (fake Dio adapter), whole-app flows
 ```

@@ -1,18 +1,39 @@
 import 'models.dart';
 
-/// Everything the Staff app needs for Mainflow 2 (10/10/2026 baseline).
+/// Everything the Staff app needs for Mainflow 2 (10/10/2026 baseline) and shift swaps (MF-04).
 ///
-/// The backend has no Task / StaffReport / shift API yet, so [DemoOperationsRepository]
-/// implements this contract in-app. An HTTP implementation replaces it once the endpoints
-/// in `docs/API_CONTRACT.md` exist; screens only depend on this interface.
+/// [HttpOperationsRepository] talks to the backend; [DemoOperationsRepository] runs the same
+/// contract in-app for demos and tests. Screens only depend on this interface.
 abstract class OperationsRepository {
   // Shifts, check-in and swaps
   Stream<List<Shift>> watchShifts();
   Future<Shift> checkIn(String shiftId);
+
+  /// Requests I sent and requests colleagues sent me, newest first.
   Stream<List<ShiftSwapRequest>> watchSwapRequests();
 
-  /// Staff asks to swap a future shift; the Operator approves and picks a replacement.
-  Future<ShiftSwapRequest> requestShiftSwap(String shiftId, SwapReason reason, String note);
+  /// Colleagues who pass every swap rule for one of my future shifts.
+  Future<SwapCandidates> swapCandidates(String shiftId, SwapType type);
+
+  /// Asks a colleague to swap ([targetShiftId] required) or cover my shift. The colleague
+  /// answers first, then a Manager decides. Refusals throw [SwapNotAllowed].
+  Future<ShiftSwapRequest> requestShiftSwap({
+    required String shiftId,
+    required SwapType type,
+    required String targetUserId,
+    String? targetShiftId,
+    SwapReason? reason,
+    String note = '',
+  });
+
+  /// The colleague's answer to a request sent to them.
+  Future<ShiftSwapRequest> respondToSwap(String requestId, {required bool accept});
+
+  /// The requester cancels while pending; the colleague can withdraw while the Manager decides.
+  Future<ShiftSwapRequest> cancelSwap(String requestId, {String? reason});
+
+  /// Reloads everything now (pull to refresh, after a notification).
+  Future<void> refresh();
 
   /// Dispatch eligibility: on shift + checked in + zone + below the task limit.
   Stream<Eligibility> watchEligibility();
@@ -58,6 +79,10 @@ abstract class DemoControls {
   String? clearLatestEvent();
   void completeActiveTasks();
 
-  /// Plays the Operator's decision on the latest pending swap request.
-  String? decideLatestSwap({required bool approve});
+  /// Moves the latest open swap request one step: the colleague answers my request, or the
+  /// Manager decides a request the colleague accepted.
+  String? advanceLatestSwap({required bool approve});
+
+  /// A colleague asks to swap one of my upcoming shifts.
+  String? receiveSwapRequest();
 }

@@ -94,7 +94,7 @@ class _OpenOfferCard extends StatelessWidget {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(offer.title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            Text('${offer.location} · offer ${offer.attempt} of ${TaskOffer.maxAttempts}',
+            Text([if (offer.location.isNotEmpty) offer.location, 'offer ${offer.attempt} of ${offer.maxAttempts}'].join(' · '),
                 style: Theme.of(context).textTheme.bodySmall),
           ]),
         ),
@@ -122,10 +122,19 @@ class _NotificationTile extends StatelessWidget {
       NotificationKind.eventCleared => Icons.check_circle_outline,
       NotificationKind.reportSent => Icons.send_outlined,
       NotificationKind.shiftStarted => Icons.login,
+      NotificationKind.shiftChanged => Icons.event_note_outlined,
       NotificationKind.swapUpdated => Icons.swap_horiz,
+      NotificationKind.general => Icons.notifications_none,
+    };
+    // Swap notifications carry no request id on the server, so they open the request list.
+    final target = switch (note.kind) {
+      _ when note.taskId != null => '/tasks/${note.taskId}',
+      NotificationKind.swapUpdated => '/shifts/swaps',
+      NotificationKind.shiftChanged => '/shifts',
+      _ => null,
     };
     return AppCard(
-      onTap: note.taskId == null ? null : () => context.go('/tasks/${note.taskId}'),
+      onTap: target == null ? null : () => context.go(target),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
           width: 40,

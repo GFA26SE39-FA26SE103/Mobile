@@ -134,6 +134,13 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
           _error = 'This offer is no longer open.';
         });
       }
+    } on OperationFailed catch (e) {
+      if (mounted) {
+        setState(() {
+          _phase = previous;
+          _error = e.message;
+        });
+      }
     }
   }
 
@@ -144,10 +151,11 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
     if (offer == null) return const SizedBox(height: 200, child: Center(child: CircularProgressIndicator()));
 
     final taken = _taken ??
-        (offer.status == OfferStatus.takenByOther ? TaskAlreadyTaken(takenBy: offer.takenBy!, takenAt: offer.takenAt!) : null);
+        (offer.status == OfferStatus.takenByOther ? TaskAlreadyTaken(takenBy: offer.takenBy, takenAt: offer.takenAt) : null);
     if (taken != null) return _TakenView(offer: offer, taken: taken);
     if (offer.status == OfferStatus.escalated) return _EscalatedView(offer: offer);
     if (offer.status == OfferStatus.eventCleared) return _ClearedView(offer: offer);
+    if (offer.status == OfferStatus.withdrawn) return _WithdrawnView(offer: offer);
 
     final c = context.colors;
     final theme = Theme.of(context).textTheme;
@@ -179,9 +187,9 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
           Text(offer.sourceCode, style: theme.bodySmall),
         ]),
         const SizedBox(height: 12),
-        FactLine(icon: Icons.place_outlined, text: '${offer.zoneName.split(' · ').first} · ${offer.location}', strong: true),
-        FactLine(icon: Icons.insights_outlined, text: offer.measurement, strong: true),
-        FactLine(icon: Icons.assignment_outlined, text: offer.instructions, strong: true),
+        FactLine(icon: Icons.place_outlined, text: place(offer.zoneName, offer.location), strong: true),
+        if (offer.measurement.isNotEmpty) FactLine(icon: Icons.insights_outlined, text: offer.measurement, strong: true),
+        if (offer.instructions.isNotEmpty) FactLine(icon: Icons.assignment_outlined, text: offer.instructions, strong: true),
         const SizedBox(height: 12),
         AppCard(
           color: c.surface2,
@@ -192,10 +200,10 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
             const SizedBox(width: 12),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Offer ${offer.attempt} of ${TaskOffer.maxAttempts}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text('Offer ${offer.attempt} of ${offer.maxAttempts}', style: const TextStyle(fontWeight: FontWeight.w600)),
                 Text(
-                  offer.attempt < TaskOffer.maxAttempts
-                      ? 'Sent to ${offer.recipients.length} staff on shift. Offered again in $secondsLeft s if nobody accepts.'
+                  offer.attempt < offer.maxAttempts
+                      ? 'Sent to ${offer.recipients} staff on shift. Offered again in $secondsLeft s if nobody accepts.'
                       : 'Last offer. If nobody accepts in $secondsLeft s, the Operator assigns it.',
                   style: theme.bodySmall,
                 ),
@@ -320,7 +328,8 @@ class _TakenView extends StatelessWidget {
         const SizedBox(height: 14),
         Text('Task already taken', style: theme.titleLarge),
         const SizedBox(height: 6),
-        Text('${taken.takenBy} accepted this task first. The offer is now withdrawn.', style: theme.bodyMedium?.copyWith(color: c.textMuted)),
+        Text('${taken.takenBy ?? 'Another staff member'} accepted this task first. The offer is now withdrawn.',
+            style: theme.bodyMedium?.copyWith(color: c.textMuted)),
         const SizedBox(height: 14),
         AppCard(
           color: c.surface2,
@@ -330,7 +339,13 @@ class _TakenView extends StatelessWidget {
               Text(offer.sourceCode, style: theme.bodySmall),
             ]),
             const SizedBox(height: 4),
-            Text('${offer.zoneName.split(' · ').first} · Accepted by ${taken.takenBy} at ${hm(taken.takenAt)}', style: theme.bodySmall),
+            Text(
+              [
+                offer.zoneName.split(' · ').first,
+                if (taken.takenBy != null) 'Accepted by ${taken.takenBy}${taken.takenAt == null ? '' : ' at ${hm(taken.takenAt!)}'}',
+              ].join(' · '),
+              style: theme.bodySmall,
+            ),
           ]),
         ),
         const SizedBox(height: 18),
@@ -352,7 +367,7 @@ class _EscalatedView extends StatelessWidget {
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Text('Offer passed to the Operator', style: theme.titleLarge),
         const SizedBox(height: 6),
-        Text('Nobody accepted "${offer.title}" after ${TaskOffer.maxAttempts} offers, so the Operator will assign it.',
+        Text('Nobody accepted "${offer.title}" after ${offer.maxAttempts} offers, so the Operator will assign it.',
             style: theme.bodyMedium),
         const SizedBox(height: 18),
         FilledButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
@@ -400,6 +415,27 @@ class _ClearedView extends StatelessWidget {
             Text('Cleared at ${hm(offer.eventClearedAt!)}', style: theme.bodySmall),
           ]),
         ),
+        const SizedBox(height: 18),
+        FilledButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+      ]),
+    );
+  }
+}
+
+/// Closed for another reason, e.g. the Operator assigned the task by hand.
+class _WithdrawnView extends StatelessWidget {
+  const _WithdrawnView({required this.offer});
+  final TaskOffer offer;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Offer withdrawn', style: theme.titleLarge),
+        const SizedBox(height: 6),
+        Text('"${offer.title}" is no longer offered to you. The Operator may have assigned it to someone.', style: theme.bodyMedium),
         const SizedBox(height: 18),
         FilledButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
       ]),
