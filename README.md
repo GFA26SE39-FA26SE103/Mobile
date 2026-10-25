@@ -46,12 +46,12 @@ the first offer arrives on its own after about 6 seconds.
 
 ```bash
 flutter pub get
-# Android emulator + local backend on the host (http://localhost:5080)
+# Shared Dev API, the default (writes to the team's Dev database; sign in with a STAFF account)
 flutter run
+# Android emulator + local backend on the host (http://localhost:5080)
+flutter run --dart-define=API_URL=http://10.0.2.2:5080
 # Physical phone on the same Wi-Fi as the backend
 flutter run --dart-define=API_URL=http://192.168.1.10:5080
-# Shared Dev API (writes to the team's Dev database; sign in with a STAFF account)
-flutter run --dart-define=API_URL=https://supermarket-api-dev.kitsuracloud.com
 # Real sign-in, demo data for shifts and tasks
 flutter run --dart-define=DEMO_OPS=true
 # No backend at all
