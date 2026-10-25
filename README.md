@@ -11,8 +11,9 @@ qualified Incident, plus confirmed StaffReports):
 - Task offers with three responses: **Handle now**, **Accept and handle later** (planned start,
   overdue when missed) and **Cannot handle** (reason required); first acceptance wins; re-offer
   countdown (60 s × 3, then the Operator assigns)
-- My tasks (Accepted / In progress / Done) with task origin (event, incident, staff report,
-  Operator) and **Start now** for deferred tasks
+- My tasks (Accepted / In progress / Finished) with task origin (event, incident, staff report,
+  Operator) and **Start now** for deferred tasks; Finished separates *Waiting for verification*
+  (SUBMITTED), *Verified* and *Cancelled*
 - Report an issue by text, **voice** (on-device speech-to-text, no audio stored) or photo → AI
   draft → confirm as a **routine request** (becomes a Task) or a **potential incident** (goes
   through Incident qualification)
@@ -25,8 +26,8 @@ Evidence capture, verification and rework (MF-03) are not in this increment.
 | Area | Source |
 |---|---|
 | Sign-in | Backend API. `--dart-define=MOCK_AUTH=true` signs in offline (password `staff123`). |
-| Shifts, check-in, swaps, task offers, tasks, notifications | **Backend API** (`lib/data/http_operations_repository.dart`, routes in the Back-End `docs/API.md`, MF-02 and MF-04). There is no push channel yet (FCM is not built), so offers, tasks, eligibility and notifications are polled every 10 s, shifts and swaps every 30 s; pull to refresh on My shifts and Swap requests. |
-| Phone notifications | **Local notifications** (`flutter_local_notifications`, `lib/core/device_notifications.dart`) while the app runs in the background: channel *Task offers* (heads-up, re-alerts on each re-offer and on CRITICAL, removed when the offer closes), *Task updates* and *Shifts and swaps*. Tapping one opens its screen. Nothing is shown while the app is in front, and nothing arrives once the app is closed: that needs FCM push, which the backend does not have yet. Android 13+ asks for the permission on first sign-in. |
+| Shifts, check-in, swaps, task offers, tasks, notifications | **Backend API** (`lib/data/http_operations_repository.dart`, routes in the Back-End `docs/API.md`, MF-02 and MF-04). There is no push channel yet (FCM is not built), so while the app is in front offers, tasks, eligibility and notifications are polled every 5 s, shifts and swaps every 30 s; polling stops in the background and everything reloads on resume. Pull to refresh on My shifts and Swap requests. |
+| Phone notifications | **Local notifications** (`flutter_local_notifications`, `lib/core/device_notifications.dart`): channel *Task offers* (heads-up, re-alerts on each re-offer and on CRITICAL, removed when the offer closes), *Task updates* and *Shifts and swaps*. Tapping one opens its screen. They are shown only for changes the app learns about after it leaves the front; since polling stops in the background, the shade stays quiet until FCM push exists on the backend. Android 13+ asks for the permission on first sign-in. |
 | Staff reports | **In-app only.** The backend has no StaffReport API yet: the AI draft runs in the app and the receipt says *Preview only: not sent*. |
 | Everything above, offline | `--dart-define=DEMO_OPS=true` (or `MOCK_AUTH=true`) runs the **in-app demo backend** (`lib/data/demo_operations_repository.dart`). |
 
@@ -37,7 +38,7 @@ episodes. **Me → Demo tools** raises an AI event task (rotating `LONG_QUEUE`,
 `CHECKOUT_CAPACITY`, `CONGESTION`, `EXCESSIVE_WAIT`), an offer someone else accepts first,
 escalates the latest WARNING event to CRITICAL (the same offer or task is updated), clears the
 latest event (an open offer is withdrawn, an accepted task stays — provisional, see open point 5
-in the contract), finishes active tasks, moves the latest swap request one step (the colleague
+in the contract), submits active tasks (they wait for verification), moves the latest swap request one step (the colleague
 answers, then the Manager decides) and receives a swap request from a colleague. After check-in
 the first offer arrives on its own after about 6 seconds.
 

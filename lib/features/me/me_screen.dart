@@ -115,10 +115,10 @@ class MeScreen extends ConsumerWidget {
               OutlinedButton.icon(
                 onPressed: () {
                   demo.completeActiveTasks();
-                  report(null, 'Active tasks marked done.');
+                  report(null, 'Active tasks submitted; they wait for the Operator to verify them.');
                 },
                 icon: const Icon(Icons.done_all),
-                label: const Text('Finish my active tasks'),
+                label: const Text('Submit my active tasks'),
               ),
             ]),
           ),

@@ -249,23 +249,46 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
         Text('The first staff member to accept gets the task.', textAlign: TextAlign.center, style: theme.bodySmall),
       ];
 
-  List<Widget> _laterChoices(TextTheme theme, AppColors c) => [
-        Text('When will you start?', style: theme.titleMedium),
-        const SizedBox(height: 4),
-        Text('You take responsibility now. If you have not started by then, the task is marked overdue.', style: theme.bodySmall),
-        const SizedBox(height: 10),
+  /// Delays whose start still falls inside the checked-in shift; the server refuses later ones.
+  List<Duration> _laterOptions() {
+    final now = ref.read(clockProvider)();
+    final end = ref.read(eligibilityProvider).valueOrNull?.shiftEndsAt;
+    return [for (final d in handleLaterOptions) if (end == null || now.add(d).isBefore(end)) d];
+  }
+
+  List<Widget> _laterChoices(TextTheme theme, AppColors c) {
+    final options = _laterOptions();
+    final later = options.contains(_later) ? _later : options.firstOrNull;
+    return [
+      Text('When will you start?', style: theme.titleMedium),
+      const SizedBox(height: 4),
+      Text('You take responsibility now. If you have not started by then, the task is marked overdue.', style: theme.bodySmall),
+      const SizedBox(height: 10),
+      if (later == null)
+        InfoBanner(
+          tone: BannerTone.warning,
+          icon: Icons.schedule,
+          title: 'Your shift ends too soon to start later',
+          body: 'Handle it now or choose Cannot handle.',
+        )
+      else
         Wrap(spacing: 8, runSpacing: 8, children: [
-          for (final d in handleLaterOptions)
-            ChoiceChip(label: Text('In ${d.inMinutes} min'), selected: _later == d, onSelected: (_) => setState(() => _later = d)),
+          for (final d in options)
+            ChoiceChip(label: Text('In ${d.inMinutes} min'), selected: later == d, onSelected: (_) => setState(() => _later = d)),
         ]),
-        const SizedBox(height: 16),
+      const SizedBox(height: 16),
+      if (later != null)
         FilledButton(
-          onPressed: () => _respond(TaskResponse.handleLater),
-          child: Text('Accept · start by ${hm(ref.read(clockProvider)().add(_later))}'),
+          onPressed: () {
+            _later = later;
+            _respond(TaskResponse.handleLater);
+          },
+          child: Text('Accept · start by ${hm(ref.read(clockProvider)().add(later))}'),
         ),
-        const SizedBox(height: 10),
-        OutlinedButton(onPressed: () => setState(() => _phase = _Phase.deciding), child: const Text('Back')),
-      ];
+      const SizedBox(height: 10),
+      OutlinedButton(onPressed: () => setState(() => _phase = _Phase.deciding), child: const Text('Back')),
+    ];
+  }
 
   List<Widget> _reasonChoices(TextTheme theme, AppColors c) => [
         Text("Why can't you handle it?", style: theme.titleMedium),

@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/config.dart';
@@ -23,7 +24,15 @@ final operationsRepositoryProvider = Provider<OperationsRepository>((ref) {
   }
   // Signed out there is nothing to poll; the next sign-in builds a new repository.
   final repo = HttpOperationsRepository(ref.watch(dioProvider), clock: clock, staffName: firstName, poll: userId != null);
-  ref.onDispose(repo.dispose);
+  // Poll only while the app is in front; reload as soon as it comes back.
+  final lifecycle = AppLifecycleListener(
+    onShow: () => repo.setForeground(true),
+    onHide: () => repo.setForeground(false),
+  );
+  ref.onDispose(() {
+    lifecycle.dispose();
+    repo.dispose();
+  });
   return repo;
 });
 

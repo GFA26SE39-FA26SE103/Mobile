@@ -51,8 +51,9 @@ class _Feed<T> {
 
 /// [OperationsRepository] over the backend API (`docs/API.md`, MF-02 staff tasks and MF-04 swaps).
 ///
-/// The API has no push channel yet (FCM is not built), so offers, tasks, eligibility and
-/// notifications are polled every [fastPoll], shifts and swap requests every [slowPoll].
+/// The API has no push channel yet (FCM is not built), so while the app is in front offers,
+/// tasks, eligibility and notifications are polled every [fastPoll], shifts and swap requests
+/// every [slowPoll]. Polling stops in the background and everything reloads on resume.
 /// StaffReport has no API yet either: [extractReport] and [submitReport] run on the in-app demo
 /// and the receipt is marked [ReportReceipt.preview].
 class HttpOperationsRepository implements OperationsRepository {
@@ -61,14 +62,15 @@ class HttpOperationsRepository implements OperationsRepository {
     required this.clock,
     String staffName = 'You',
     bool poll = true,
-    this.fastPoll = const Duration(seconds: 10),
+    this.fastPoll = const Duration(seconds: 5),
     this.slowPoll = const Duration(seconds: 30),
-  }) : _reports = DemoOperationsRepository(clock: clock, staffName: staffName, autoOfferAfterCheckIn: null) {
+  })  : _poll = poll,
+        _reports = DemoOperationsRepository(clock: clock, staffName: staffName, autoOfferAfterCheckIn: null) {
     _shifts = _Feed(_loadShifts);
     _eligibility = _Feed(() async => _eligibilityOf(await _get('/api/me/eligibility')));
     _offers = _Feed(() async => [for (final o in await _get('/api/me/task-offers', {'status': 'ALL'}) as List) _offerOf(o as Map)]);
     _tasks = _Feed(() async => [
-          for (final t in await _get('/api/me/tasks', {'status': 'ACCEPTED,IN_PROGRESS,SUBMITTED,VERIFIED'}) as List) _taskOf(t as Map),
+          for (final t in await _get('/api/me/tasks', {'status': 'ACCEPTED,IN_PROGRESS,SUBMITTED,VERIFIED,CANCELLED'}) as List) _taskOf(t as Map),
         ]);
     _notifications = _Feed(() async => [for (final n in await _get('/api/me/notifications') as List) _notificationOf(n as Map)]);
     _swaps = _Feed(() async => [for (final r in await _get('/api/me/swap-requests') as List) _swapOf(r as Map)]);
@@ -76,14 +78,11 @@ class HttpOperationsRepository implements OperationsRepository {
     _notesSub = _notifications._controller.stream.listen(_followNotifications);
     if (poll) {
       unawaited(refresh());
-      _timers.add(Timer.periodic(fastPoll, (_) => _refreshFast()));
-      _timers.add(Timer.periodic(slowPoll, (_) {
-        _shifts.refresh();
-        _swaps.refresh();
-      }));
+      _startTimers();
     }
   }
 
+  final bool _poll;
   final Dio _dio;
   final DateTime Function() clock;
   final Duration fastPoll;
@@ -125,6 +124,32 @@ class HttpOperationsRepository implements OperationsRepository {
     _eligibility.refresh();
     _tasks.refresh();
     _notifications.refresh();
+  }
+
+  void _startTimers() {
+    _timers.add(Timer.periodic(fastPoll, (_) => _refreshFast()));
+    _timers.add(Timer.periodic(slowPoll, (_) {
+      _shifts.refresh();
+      _swaps.refresh();
+    }));
+  }
+
+  void _stopTimers() {
+    for (final t in _timers) {
+      t.cancel();
+    }
+    _timers.clear();
+  }
+
+  bool _disposed = false;
+
+  @override
+  void setForeground(bool foreground) {
+    if (!_poll || _disposed) return;
+    _stopTimers();
+    if (!foreground) return;
+    unawaited(refresh());
+    _startTimers();
   }
 
   @override
@@ -222,6 +247,7 @@ class HttpOperationsRepository implements OperationsRepository {
       activeTasks: json['activeTasks'] as int,
       limit: (json['maxActiveTasks'] as int?) ?? Eligibility.workloadLimit,
       zoneName: checkedIn ? _zones(json['zones']) : null,
+      shiftEndsAt: checkedIn ? _timeOrNull(json['shiftEndsAt']) : null,
     );
   }
 
@@ -289,7 +315,10 @@ class HttpOperationsRepository implements OperationsRepository {
       status: switch (json['status']) {
         'ACCEPTED' => TaskStatus.accepted,
         'IN_PROGRESS' => TaskStatus.inProgress,
-        _ => TaskStatus.done,
+        'SUBMITTED' => TaskStatus.submitted,
+        'VERIFIED' => TaskStatus.verified,
+        'CANCELLED' => TaskStatus.cancelled,
+        final other => throw FormatException('Unknown task status $other'),
       },
       plannedStartAt: _timeOrNull(json['plannedStartAt']),
       startedAt: _timeOrNull(json['startedAt']),
@@ -577,9 +606,8 @@ class HttpOperationsRepository implements OperationsRepository {
   }
 
   void dispose() {
-    for (final t in _timers) {
-      t.cancel();
-    }
+    _disposed = true;
+    _stopTimers();
     _offersSub.cancel();
     _notesSub.cancel();
     _incoming.close();

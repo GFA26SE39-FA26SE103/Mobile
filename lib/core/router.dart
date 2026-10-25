@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../data/providers.dart';
+import 'config.dart';
 import '../features/alerts/alerts_screen.dart';
 import '../features/alerts/incoming_alert.dart';
 import '../features/alerts/notification_host.dart';
@@ -122,7 +123,14 @@ class _StaffShell extends ConsumerWidget {
     final badge = unread + openOffers;
     final swaps = ref.watch(swapsAwaitingMeProvider);
     return Scaffold(
-      body: DeviceNotificationHost(child: TaskOfferHost(child: shell)),
+      body: DeviceNotificationHost(
+        child: TaskOfferHost(
+          // Demo data must never pass for the real store.
+          child: AppConfig.demoOperations
+              ? Banner(message: 'DEMO DATA', location: BannerLocation.topEnd, child: shell)
+              : shell,
+        ),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: shell.currentIndex,
         onDestinationSelected: (i) => shell.goBranch(i, initialLocation: i == shell.currentIndex),

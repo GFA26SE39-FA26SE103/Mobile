@@ -86,13 +86,16 @@ class Shift {
 /// Whether this staff member can currently be offered Tasks (BR-19, BR-23, BR-35):
 /// on shift, checked in, assigned to the zone, and below the active-task limit.
 class Eligibility {
-  const Eligibility({required this.checkedIn, required this.activeTasks, this.zoneName, this.limit = workloadLimit});
+  const Eligibility({required this.checkedIn, required this.activeTasks, this.zoneName, this.limit = workloadLimit, this.shiftEndsAt});
 
   static const workloadLimit = 2;
 
   final bool checkedIn;
   final int activeTasks;
   final String? zoneName;
+
+  /// End of the checked-in shift; "Handle later" cannot promise a start after it.
+  final DateTime? shiftEndsAt;
 
   /// The server's limit (`maxActiveTasks`); BR-23 says 2.
   final int limit;
@@ -101,9 +104,9 @@ class Eligibility {
   bool get canReceiveOffers => checkedIn && !atWorkloadLimit;
 }
 
-/// `eventCleared`: the OperationalEvent episode recovered before anyone accepted (provisional
-/// demo behaviour; see open point 5 in docs/API_CONTRACT.md). `withdrawn`: closed for another
-/// reason, e.g. the Operator assigned the task by hand.
+/// `eventCleared`: the OperationalEvent episode recovered before anyone accepted (server
+/// `WITHDRAWN` + `EVENT_CLEARED`). `withdrawn`: closed for another reason, e.g. the Operator
+/// assigned the task by hand (`MANUALLY_ASSIGNED`). `escalated`: nobody accepted (`EXPIRED`).
 enum OfferStatus { open, takenByOther, accepted, declined, escalated, eventCleared, withdrawn }
 
 /// A Task offered to eligible zone staff. The first valid acceptance wins (BR-21).
@@ -223,10 +226,14 @@ enum DeclineReason {
   final String label;
 }
 
+/// Server Task states for the assignee. SUBMITTED waits for the Operator to verify the work;
+/// only VERIFIED means it was confirmed done.
 enum TaskStatus {
   accepted('Accepted'),
   inProgress('In progress'),
-  done('Done');
+  submitted('Waiting for verification'),
+  verified('Verified'),
+  cancelled('Cancelled');
 
   const TaskStatus(this.label);
   final String label;
@@ -276,7 +283,7 @@ class StaffTask {
   /// stays with the staff member, who checks the area and finishes it (provisional demo behaviour).
   final DateTime? eventClearedAt;
 
-  bool get isActive => status != TaskStatus.done;
+  bool get isActive => status == TaskStatus.accepted || status == TaskStatus.inProgress;
   bool get isDeferred => status == TaskStatus.accepted && plannedStartAt != null;
 
   /// Responsibility accepted but work not started by the promised time.

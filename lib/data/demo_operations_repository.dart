@@ -152,7 +152,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
         createdAt: now.subtract(const Duration(hours: 2, minutes: 10)),
         acceptedAt: now.subtract(const Duration(hours: 2, minutes: 8)),
         startedAt: now.subtract(const Duration(hours: 2, minutes: 8)),
-        status: TaskStatus.done,
+        status: TaskStatus.verified,
         cameraCode: 'CAM-01',
       ),
     ];
@@ -187,6 +187,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
       checkedIn: checkedIn,
       activeTasks: _tasks.value.where((t) => t.isActive).length,
       zoneName: checkedIn ? shift.zoneName : null,
+      shiftEndsAt: checkedIn ? shift.end : null,
     );
   }
 
@@ -702,9 +703,14 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
     return started;
   }
 
+  /// Demo timers keep running in the background so a demo stays on schedule.
+  @override
+  void setForeground(bool foreground) {}
+
   @override
   void completeActiveTasks() {
-    _tasks.value = [for (final t in _tasks.value) t.isActive ? t.copyWith(status: TaskStatus.done) : t];
+    // Submitted, not verified: verification belongs to the Operator.
+    _tasks.value = [for (final t in _tasks.value) t.isActive ? t.copyWith(status: TaskStatus.submitted) : t];
     _refreshEligibility();
   }
 

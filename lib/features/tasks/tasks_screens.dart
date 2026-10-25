@@ -16,8 +16,23 @@ class MyTasksScreen extends ConsumerStatefulWidget {
   ConsumerState<MyTasksScreen> createState() => _MyTasksScreenState();
 }
 
+enum _Tab {
+  accepted('Accepted'),
+  inProgress('In progress'),
+  finished('Finished');
+
+  const _Tab(this.label);
+  final String label;
+
+  bool has(StaffTask t) => switch (this) {
+        _Tab.accepted => t.status == TaskStatus.accepted,
+        _Tab.inProgress => t.status == TaskStatus.inProgress,
+        _Tab.finished => !t.isActive,
+      };
+}
+
 class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
-  TaskStatus _tab = TaskStatus.accepted;
+  _Tab _tab = _Tab.accepted;
 
   @override
   Widget build(BuildContext context) {
@@ -25,8 +40,9 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
     final eligibility = ref.watch(eligibilityProvider).valueOrNull;
     final openOffers = ref.watch(openOffersProvider).valueOrNull ?? const [];
     final now = ref.watch(clockProvider)();
-    final visible = tasks.where((t) => t.status == _tab).toList()
-      ..sort((a, b) => (a.plannedStartAt ?? a.acceptedAt).compareTo(b.plannedStartAt ?? b.acceptedAt));
+    int byStart(StaffTask a, StaffTask b) => (a.plannedStartAt ?? a.acceptedAt).compareTo(b.plannedStartAt ?? b.acceptedAt);
+    // Finished tasks newest first; open ones in the order they should be worked on.
+    final visible = tasks.where(_tab.has).toList()..sort(_tab == _Tab.finished ? (a, b) => byStart(b, a) : byStart);
 
     return Scaffold(
       appBar: AppBar(
@@ -38,7 +54,7 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 14, 16, 28), children: [
         _Segments(
           value: _tab,
-          counts: {for (final s in TaskStatus.values) s: tasks.where((t) => t.status == s).length},
+          counts: {for (final s in _Tab.values) s: tasks.where(s.has).length},
           onChanged: (s) => setState(() => _tab = s),
         ),
         const SizedBox(height: 14),
@@ -76,8 +92,8 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
     );
   }
 
-  Widget _emptyFor(TaskStatus tab, Eligibility? e) => switch (tab) {
-        TaskStatus.accepted => EmptyState(
+  Widget _emptyFor(_Tab tab, Eligibility? e) => switch (tab) {
+        _Tab.accepted => EmptyState(
             icon: Icons.inbox_outlined,
             title: 'No accepted tasks',
             body: e?.checkedIn ?? false
@@ -87,24 +103,24 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
                 ? null
                 : OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Go to my shifts')),
           ),
-        TaskStatus.inProgress => const EmptyState(
+        _Tab.inProgress => const EmptyState(
             icon: Icons.play_circle_outline,
             title: 'Nothing in progress',
             body: 'Tasks you handle now or start later appear here.',
           ),
-        TaskStatus.done => const EmptyState(
+        _Tab.finished => const EmptyState(
             icon: Icons.task_alt,
             title: 'No finished tasks yet',
-            body: 'Completed tasks from this shift appear here.',
+            body: 'Submitted tasks wait here for the Operator to verify them.',
           ),
       };
 }
 
 class _Segments extends StatelessWidget {
   const _Segments({required this.value, required this.counts, required this.onChanged});
-  final TaskStatus value;
-  final Map<TaskStatus, int> counts;
-  final ValueChanged<TaskStatus> onChanged;
+  final _Tab value;
+  final Map<_Tab, int> counts;
+  final ValueChanged<_Tab> onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -113,7 +129,7 @@ class _Segments extends StatelessWidget {
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(color: c.track, borderRadius: BorderRadius.circular(12)),
       child: Row(children: [
-        for (final s in TaskStatus.values)
+        for (final s in _Tab.values)
           Expanded(
             child: Semantics(
               selected: s == value,
@@ -133,7 +149,7 @@ class _Segments extends StatelessWidget {
                         : null,
                   ),
                   child: Text(
-                    s == TaskStatus.done ? s.label : '${s.label} · ${counts[s] ?? 0}',
+                    s == _Tab.finished ? s.label : '${s.label} · ${counts[s] ?? 0}',
                     style: TextStyle(
                       fontSize: 13.5,
                       fontWeight: s == value ? FontWeight.w600 : FontWeight.w500,

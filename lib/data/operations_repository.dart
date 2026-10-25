@@ -35,6 +35,9 @@ abstract class OperationsRepository {
   /// Reloads everything now (pull to refresh, after a notification).
   Future<void> refresh();
 
+  /// The app came to the front (reload now and keep polling) or went to the background (stop).
+  void setForeground(bool foreground);
+
   /// Dispatch eligibility: on shift + checked in + zone + below the task limit.
   Stream<Eligibility> watchEligibility();
 

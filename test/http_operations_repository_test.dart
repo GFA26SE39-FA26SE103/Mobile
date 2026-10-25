@@ -358,4 +358,42 @@ void main() {
 
     await expectLater(repo.watchShifts().first, throwsA(predicate((e) => '$e' == 'Shift data is not ready.')));
   });
+
+  test('submitted is not verified, cancelled is finished, and the shift end limits Handle later', () async {
+    final (:repo, :api) = build();
+    api.on('GET /api/me/tasks', (_) => [
+          taskJson(status: 'SUBMITTED'),
+          taskJson(status: 'VERIFIED')..['taskId'] = 'task-2',
+          taskJson(status: 'CANCELLED')..['taskId'] = 'task-3',
+        ]);
+    await repo.refresh();
+
+    final tasks = await repo.watchTasks().first;
+    expect(tasks.map((t) => t.status), [TaskStatus.submitted, TaskStatus.verified, TaskStatus.cancelled]);
+    expect(tasks.any((t) => t.isActive), isFalse);
+    expect(api.calls.firstWhere((c) => c.path == '/api/me/tasks').queryParameters['status'], contains('CANCELLED'));
+    expect((await repo.watchEligibility().first).shiftEndsAt, now.add(const Duration(hours: 4)));
+  });
+
+  test('polling runs only in the foreground and reloads on resume', () async {
+    final api = build().api;
+    final dio = Dio(BaseOptions(baseUrl: 'http://api.test'))..httpClientAdapter = api;
+    final repo = HttpOperationsRepository(dio, clock: () => now, fastPoll: const Duration(milliseconds: 20), slowPoll: const Duration(hours: 1));
+    addTearDown(repo.dispose);
+    int offerCalls() => api.calls.where((c) => c.path == '/api/me/task-offers').length;
+
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(offerCalls(), greaterThan(1));
+
+    repo.setForeground(false);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final paused = offerCalls();
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(offerCalls(), paused);
+
+    // Well before the next 20 ms tick, so this call comes from the reload on resume.
+    repo.setForeground(true);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(offerCalls(), greaterThan(paused));
+  });
 }
