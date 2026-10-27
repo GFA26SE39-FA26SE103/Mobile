@@ -375,6 +375,13 @@ void main() {
     expect((await repo.watchEligibility().first).shiftEndsAt, now.add(const Duration(hours: 4)));
   });
 
+  test('a shift the Manager cancelled is left out of My shifts', () async {
+    final (:repo, :api) = build();
+    api.on('GET /api/me/shifts', (_) => [shiftJson(), shiftJson(id: 'sa-2')..['status'] = 'CANCELLED']);
+    await repo.refresh();
+    expect((await repo.watchShifts().first).map((s) => s.shiftId), ['sa-1']);
+  });
+
   test('polling runs only in the foreground and reloads on resume', () async {
     final api = build().api;
     final dio = Dio(BaseOptions(baseUrl: 'http://api.test'))..httpClientAdapter = api;

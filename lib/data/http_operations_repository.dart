@@ -197,7 +197,11 @@ class HttpOperationsRepository implements OperationsRepository {
     // From Monday, so the week strip shows earlier days of this week, to two weeks ahead.
     final from = today.subtract(Duration(days: now.weekday - 1));
     final data = await _get('/api/me/shifts', {'from': _date(from), 'to': _date(today.add(const Duration(days: 14)))});
-    return [for (final s in data as List) _shiftOf(s as Map)]..sort((a, b) => a.start.compareTo(b.start));
+    // A shift the Manager cancelled cannot be checked into or swapped; its notification says so.
+    return [
+      for (final s in data as List)
+        if ((s as Map)['status'] != 'CANCELLED') _shiftOf(s),
+    ]..sort((a, b) => a.start.compareTo(b.start));
   }
 
   // ------------------------------------------------------------------- mapping

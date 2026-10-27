@@ -50,7 +50,11 @@ Respond bodies:
 `HANDLE_NOW` → task `IN_PROGRESS`; `HANDLE_LATER` → `ACCEPTED` with a planned start that must be in
 the future and before `shiftEndsAt` (the app only offers delays inside the shift);
 `CANNOT_HANDLE` needs a reason and creates no task for the caller. The app reports success only
-after the server answers.
+after the server answers. Repeating an accepted response (e.g. after a timeout) returns the same
+task instead of `OFFER_CLOSED`.
+
+`GET /api/me/shifts` also returns `CANCELLED` assignments; the app leaves them out of My shifts
+(check-in answers `SHIFT_CANCELLED`). Draft assignments are never returned.
 
 Errors the app handles: `TASK_ALREADY_TAKEN` (detail names who and when), `OFFER_CLOSED`,
 `WORKLOAD_LIMIT`, `CHECK_IN_TOO_EARLY`. Others (`NOT_ON_SHIFT`, `INVALID_PLANNED_START`,
