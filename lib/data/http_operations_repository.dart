@@ -294,7 +294,8 @@ class HttpOperationsRepository implements OperationsRepository {
       recipients: (json['recipients'] as int?) ?? 1,
       attempt: attempt,
       maxAttempts: (json['maxAttempts'] as int?) ?? TaskOffer.defaultMaxAttempts,
-      nextAlertAt: _timeOrNull(json['nextAlertAt']) ?? createdAt.add(TaskOffer.realertInterval * attempt),
+      // The retry interval is a server setting; never guess the next round when it is not sent.
+      nextAlertAt: _timeOrNull(json['nextAlertAt']),
       status: status,
       cameraCode: json['cameraCode'] as String?,
       eventClearedAt: _timeOrNull(json['eventClearedAt']),

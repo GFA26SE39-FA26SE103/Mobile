@@ -375,6 +375,41 @@ void main() {
     expect((await repo.watchEligibility().first).shiftEndsAt, now.add(const Duration(hours: 4)));
   });
 
+  test('offer outcomes and the last round follow the server, with nothing guessed', () async {
+    final (:repo, :api) = build();
+    Map<String, Object?> o(String id, String status, {String? reason, int attempt = 1}) =>
+        offerJson(attempt: attempt, status: status, closedReason: reason)..['offerId'] = id;
+    api.on('GET /api/me/task-offers', (_) => [
+          o('last', 'OFFERED', attempt: 3)..['nextAlertAt'] = null,
+          o('expired', 'EXPIRED', reason: 'NO_ACCEPTANCE'),
+          o('cleared', 'WITHDRAWN', reason: 'EVENT_CLEARED'),
+          o('manual', 'WITHDRAWN', reason: 'MANUALLY_ASSIGNED'),
+          o('declined', 'DECLINED'),
+        ]);
+    await repo.refresh();
+    Future<TaskOffer> get(String id) async => (await repo.watchOffer(id).first)!;
+
+    final last = await get('last');
+    expect((last.isOpen, last.attempt, last.maxAttempts, last.nextAlertAt), (true, 3, 4, null));
+    expect((await get('expired')).status, OfferStatus.escalated);
+    expect((await get('cleared')).status, OfferStatus.eventCleared);
+    // Withdrawn by the Operator is not "taken by someone else".
+    expect((await get('manual')).status, OfferStatus.withdrawn);
+    expect((await get('declined')).status, OfferStatus.declined);
+  });
+
+  test('Handle now and Cannot handle send exactly the documented payload', () async {
+    final (:repo, :api) = build();
+    await repo.refresh();
+    api.on('POST /api/task-offers/off-1/respond', (r) => {'response': (r.data as Map)['response'], 'task': null});
+
+    await repo.respondToOffer('off-1', TaskResponse.handleNow);
+    expect(api.calls.last.data, {'response': 'HANDLE_NOW', 'plannedStartAt': null, 'reason': null});
+
+    expect(await repo.respondToOffer('off-1', TaskResponse.cannotHandle, reason: DeclineReason.onBreak), isNull);
+    expect(api.calls.last.data, {'response': 'CANNOT_HANDLE', 'plannedStartAt': null, 'reason': 'On break'});
+  });
+
   test('a shift the Manager cancelled is left out of My shifts', () async {
     final (:repo, :api) = build();
     api.on('GET /api/me/shifts', (_) => [shiftJson(), shiftJson(id: 'sa-2')..['status'] = 'CANCELLED']);

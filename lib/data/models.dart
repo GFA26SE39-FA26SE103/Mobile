@@ -157,7 +157,9 @@ class TaskOffer {
 
   /// Total offers before the Operator takes over (server `SystemSetting`, 3 by default).
   final int maxAttempts;
-  final DateTime nextAlertAt;
+  /// When the offer goes out again. Null on the last offer: the server then hands the task to
+  /// the Operator instead of re-offering it.
+  final DateTime? nextAlertAt;
   final OfferStatus status;
   final String? takenBy;
   final DateTime? takenAt;

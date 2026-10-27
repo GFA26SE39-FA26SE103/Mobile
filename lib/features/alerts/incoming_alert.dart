@@ -85,6 +85,8 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
   String? _error;
   TaskAlreadyTaken? _taken;
   late final Timer _ticker;
+  int _roundAttempt = 0;
+  int _roundSeconds = 1;
 
   @override
   void initState() {
@@ -160,7 +162,13 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
     final c = context.colors;
     final theme = Theme.of(context).textTheme;
     final sending = _phase == _Phase.sending;
-    final secondsLeft = math.max(0, offer.nextAlertAt.difference(now).inSeconds);
+    final next = offer.nextAlertAt;
+    final secondsLeft = next == null ? null : math.max(0, next.difference(now).inSeconds);
+    // The ring spans this round as first seen, since the server sets the retry interval.
+    if (secondsLeft != null && offer.attempt != _roundAttempt) {
+      _roundAttempt = offer.attempt;
+      _roundSeconds = math.max(1, secondsLeft);
+    }
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -196,15 +204,18 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
           borderColor: c.surface2,
           padding: const EdgeInsets.all(12),
           child: Row(children: [
-            _Countdown(seconds: secondsLeft, total: TaskOffer.realertInterval.inSeconds),
+            if (secondsLeft != null)
+              _Countdown(seconds: secondsLeft, total: math.max(_roundSeconds, secondsLeft))
+            else
+              Icon(Icons.support_agent, color: c.textMuted, size: 28),
             const SizedBox(width: 12),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Offer ${offer.attempt} of ${offer.maxAttempts}', style: const TextStyle(fontWeight: FontWeight.w600)),
                 Text(
-                  offer.attempt < offer.maxAttempts
+                  secondsLeft != null && offer.attempt < offer.maxAttempts
                       ? 'Sent to ${offer.recipients} staff on shift. Offered again in $secondsLeft s if nobody accepts.'
-                      : 'Last offer. If nobody accepts in $secondsLeft s, the Operator assigns it.',
+                      : 'Last offer. If nobody accepts it soon, the Operator assigns it.',
                   style: theme.bodySmall,
                 ),
               ]),

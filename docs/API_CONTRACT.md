@@ -79,7 +79,9 @@ falls back to demo data.
 There is no push channel (no FCM, no SignalR). While the app is in front it polls offers, tasks,
 eligibility and notifications every 5 s and shifts and swaps every 30 s; polling stops in the
 background and everything reloads on resume. An offer sheet opens again only when the offer id,
-attempt or priority changes. Signing out disposes the repository, its timers and cached data.
+attempt or priority changes. The countdown uses the server's `nextAlertAt` (retry interval is a
+`SystemSetting`, 10 s in the MF-02 demo); it is null on the last round, which the app shows as
+"Last offer" without inventing a time. Signing out disposes the repository, its timers and cached data.
 
 ## Not on the backend yet
 
