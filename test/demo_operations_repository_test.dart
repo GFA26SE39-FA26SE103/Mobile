@@ -419,4 +419,24 @@ void main() {
       });
     });
   });
+
+  test('completion: the note is required, two rejections hand the task to someone else', () {
+    withRepo(DateTime(2026, 10, 20, 10), (async, repo) {
+      // The seeded staff-report task, accepted for later.
+      const id = 'task-2031';
+      expect(failure(async, repo.submitTask(id, 'Done')), isA<OperationFailed>());
+      run(async, repo.startTask(id));
+      expect(failure(async, repo.submitTask(id, ' ')), isA<OperationFailed>());
+      expect(run(async, repo.submitTask(id, 'Rack refilled')).status, TaskStatus.submitted);
+
+      expect(repo.reviewLatestSubmission(approve: false), isNull);
+      expect(run(async, repo.watchTasks().first).firstWhere((t) => t.taskId == id).status, TaskStatus.inProgress);
+      expect(run(async, repo.taskEvidence(id)).latest!.status, ReviewStatus.rejected);
+
+      run(async, repo.submitTask(id, 'Rack refilled and tidied'));
+      expect(repo.reviewLatestSubmission(approve: false), isNull);
+      expect(run(async, repo.watchTasks().first).where((t) => t.taskId == id), isEmpty);
+      expect(repo.reviewLatestSubmission(approve: true), isNotNull);
+    });
+  });
 }

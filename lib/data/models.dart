@@ -667,6 +667,72 @@ class SwapCandidates {
   final int hiddenCount;
 }
 
+/// Photo slots of a completion record (BR-26).
+enum EvidenceKind {
+  before('BEFORE_PHOTO', 'Before'),
+  after('AFTER_PHOTO', 'After');
+
+  const EvidenceKind(this.code, this.label);
+  final String code;
+  final String label;
+
+  static EvidenceKind fromCode(String code) => values.firstWhere((k) => k.code == code);
+}
+
+/// A photo the server holds. [imageUrl] needs the signed-in session to load.
+class EvidencePhoto {
+  const EvidencePhoto({required this.evidenceId, required this.kind, required this.imageUrl, required this.capturedAt});
+  final String evidenceId;
+  final EvidenceKind kind;
+  final String imageUrl;
+  final DateTime capturedAt;
+}
+
+enum ReviewStatus { pending, verified, rejected }
+
+/// One submitted completion record and the Operator's decision on it.
+class TaskSubmission {
+  const TaskSubmission({
+    required this.submissionId,
+    required this.note,
+    required this.submittedAt,
+    required this.status,
+    this.rejectReason,
+    this.photos = const [],
+  });
+  final String submissionId;
+  final String note;
+  final DateTime submittedAt;
+  final ReviewStatus status;
+  final String? rejectReason;
+  final List<EvidencePhoto> photos;
+}
+
+/// What a task needs before submission, the photos uploaded so far and earlier submissions (newest first).
+class TaskEvidenceState {
+  const TaskEvidenceState({
+    required this.taskId,
+    required this.requiresBefore,
+    required this.requiresAfter,
+    this.rejectionCount = 0,
+    this.drafts = const [],
+    this.submissions = const [],
+  });
+  final String taskId;
+  final bool requiresBefore;
+  final bool requiresAfter;
+  final int rejectionCount;
+  final List<EvidencePhoto> drafts;
+  final List<TaskSubmission> submissions;
+
+  bool requires(EvidenceKind kind) => kind == EvidenceKind.before ? requiresBefore : requiresAfter;
+  EvidencePhoto? draft(EvidenceKind kind) => drafts.where((d) => d.kind == kind).firstOrNull;
+  TaskSubmission? get latest => submissions.firstOrNull;
+
+  /// The last submission came back from the Operator for rework.
+  bool get inRework => latest?.status == ReviewStatus.rejected;
+}
+
 class CheckInTooEarly implements Exception {
   const CheckInTooEarly(this.opensAt);
   final DateTime opensAt;

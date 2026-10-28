@@ -58,6 +58,17 @@ final offerProvider = StreamProvider.family<TaskOffer?, String>(
 
 final tasksProvider = StreamProvider<List<StaffTask>>((ref) => ref.watch(operationsRepositoryProvider).watchTasks());
 
+/// Evidence of one task; reloaded whenever the task itself changes (submitted, verified, rejected).
+final taskEvidenceProvider = FutureProvider.autoDispose.family<TaskEvidenceState, String>((ref, taskId) {
+  ref.watch(tasksProvider.select((tasks) => tasks.valueOrNull?.where((t) => t.taskId == taskId).firstOrNull?.status));
+  return ref.watch(operationsRepositoryProvider).taskEvidence(taskId);
+});
+
+/// Bytes of a stored evidence photo, cached while a screen shows it.
+final evidenceImageProvider = FutureProvider.autoDispose.family<List<int>, String>(
+  (ref, url) => ref.watch(operationsRepositoryProvider).evidenceImage(url),
+);
+
 final notificationsProvider = StreamProvider<List<AppNotification>>(
   (ref) => ref.watch(operationsRepositoryProvider).watchNotifications(),
 );

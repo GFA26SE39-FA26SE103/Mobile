@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -437,5 +438,53 @@ void main() {
     repo.setForeground(true);
     await Future<void>.delayed(const Duration(milliseconds: 5));
     expect(offerCalls(), greaterThan(paused));
+  });
+
+  test('evidence: parse the state, upload a photo as multipart, submit the note, map refusals', () async {
+    final (:repo, :api) = build();
+    Map<String, Object?> photo(String id, String type) => {'evidenceId': id, 'evidenceType': type, 'imageUrl': '/api/tasks/task-1/evidence/$id/image', 'capturedAt': utc(now)};
+    final state = {
+      'taskId': 'task-1',
+      'taskStatus': 'IN_PROGRESS',
+      'requiresBeforePhoto': true,
+      'requiresAfterPhoto': true,
+      'rejectionCount': 1,
+      'drafts': [photo('ev-2', 'AFTER_PHOTO')],
+      'submissions': [
+        {
+          'submissionId': 'sub-1',
+          'submittedByUserId': 'me',
+          'submittedByName': 'Linh',
+          'note': 'Mopped',
+          'submittedAt': utc(now.subtract(const Duration(minutes: 5))),
+          'reviewStatus': 'REJECTED',
+          'rejectReason': 'Still wet',
+          'photos': [photo('ev-1', 'BEFORE_PHOTO')],
+        },
+      ],
+    };
+    api.on('GET /api/tasks/task-1/evidence', (_) => state);
+    final evidence = await repo.taskEvidence('task-1');
+    expect((evidence.requiresBefore, evidence.requiresAfter, evidence.rejectionCount, evidence.inRework), (true, true, 1, true));
+    expect(evidence.draft(EvidenceKind.after)!.evidenceId, 'ev-2');
+    expect(evidence.latest!.rejectReason, 'Still wet');
+    expect(evidence.latest!.photos.single.kind, EvidenceKind.before);
+
+    final file = File('${Directory.systemTemp.createTempSync('ev').path}/after.jpg')..writeAsBytesSync([0xff, 0xd8, 0xff, 0xe0]);
+    api.on('POST /api/tasks/task-1/evidence', (_) => state);
+    await repo.uploadEvidence('task-1', EvidenceKind.before, file.path);
+    final form = api.calls.last.data as FormData;
+    expect(form.fields.single, isA<MapEntry<String, String>>().having((f) => '${f.key}=${f.value}', 'field', 'type=BEFORE_PHOTO'));
+    expect(form.files.single.value.contentType.toString(), 'image/jpeg');
+
+    api.on('POST /api/tasks/task-1/submit', (_) => const Problem(422, 'EVIDENCE_REQUIRED', 'This task needs a before photo.'));
+    await expectLater(
+      repo.submitTask('task-1', 'Done'),
+      throwsA(isA<OperationFailed>().having((e) => e.message, 'message', 'This task needs a before photo.')),
+    );
+    api.on('POST /api/tasks/task-1/submit', (_) => {'taskId': 'task-1', 'status': 'SUBMITTED'});
+    api.on('GET /api/me/tasks', (_) => [taskJson(status: 'SUBMITTED')]);
+    expect((await repo.submitTask('task-1', '  Mopped and dried  ')).status, TaskStatus.submitted);
+    expect(api.calls.firstWhere((c) => c.path == '/api/tasks/task-1/submit' && c.data is Map && (c.data as Map)['note'] == 'Mopped and dried'), isNotNull);
   });
 }

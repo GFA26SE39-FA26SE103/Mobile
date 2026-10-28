@@ -276,4 +276,59 @@ void main() {
 
     expect(text('New offers are paused'), findsOneWidget);
   });
+  appTest('complete a task: note → submit → rework → resubmit → verified', (tester, app) async {
+    await checkIn(tester);
+    app.repo.simulateEventTask();
+    await settle(tester);
+    await tapVisible(tester, find.widgetWithText(FilledButton, 'Handle now'));
+    await settle(tester);
+
+    await tapVisible(tester, find.widgetWithText(FilledButton, 'Complete task'));
+    await settle(tester);
+    expect(find.widgetWithText(AppBar, 'Complete task'), findsOneWidget);
+    expect(text('Add a completion note'), findsOneWidget);
+    await tester.scrollUntilVisible(text('Submit for verification'), 300, scrollable: find.byType(Scrollable).first);
+    final submit = find.ancestor(of: text('Submit for verification'), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton));
+    expect(submit, findsOneWidget);
+    expect(tester.widget<ButtonStyleButton>(submit).onPressed, isNull);
+
+    await tester.enterText(find.byType(TextField), 'Opened counter 4, queue cleared');
+    await tester.pump();
+    await tapVisible(tester, submit);
+    await settle(tester);
+    expect(text('Waiting for verification'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Back to my tasks'));
+    await settle(tester);
+    expect(app.repo.reviewLatestSubmission(approve: false), isNull);
+    await settle(tester);
+    await tester.tap(find.textContaining('In progress ·'));
+    await settle(tester);
+    await tapVisible(tester, find.text('Long queue at checkout').first);
+    await settle(tester);
+    expect(text('Rework needed'), findsOneWidget);
+
+    await tester.scrollUntilVisible(text('Complete task'), 300, scrollable: find.byType(Scrollable).first);
+    await tapVisible(tester, text('Complete task'));
+    await settle(tester);
+    expect(text('Rework needed'), findsOneWidget);
+    await tester.scrollUntilVisible(find.byType(TextField), 300, scrollable: find.byType(Scrollable).first);
+    await tester.enterText(find.byType(TextField), 'Opened counters 4 and 5');
+    await tester.pump();
+    await tester.scrollUntilVisible(text('Submit for verification'), 300, scrollable: find.byType(Scrollable).first);
+    await tapVisible(tester, text('Submit for verification'));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(FilledButton, 'Back to my tasks'));
+    await settle(tester);
+
+    expect(app.repo.reviewLatestSubmission(approve: true), isNull);
+    await settle(tester);
+    await tapVisible(tester, find.textContaining('Finished'));
+    await settle(tester);
+    await tapVisible(tester, find.text('Long queue at checkout').first);
+    await settle(tester);
+    expect(text('Verified'), findsOneWidget);
+    await tester.scrollUntilVisible(text('Opened counters 4 and 5'), 300, scrollable: find.byType(Scrollable).first);
+    expect(text('Opened counters 4 and 5'), findsOneWidget);
+  });
 }

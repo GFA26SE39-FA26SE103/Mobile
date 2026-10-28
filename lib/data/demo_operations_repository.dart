@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'models.dart';
 import 'operations_repository.dart';
@@ -712,6 +713,128 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
     // Submitted, not verified: verification belongs to the Operator.
     _tasks.value = [for (final t in _tasks.value) t.isActive ? t.copyWith(status: TaskStatus.submitted) : t];
     _refreshEligibility();
+  }
+
+  // --------------------------------------------------------------- completion
+
+  /// Evidence per task: the draft photos and the submissions, newest first.
+  final _evidence = <String, TaskEvidenceState>{};
+  int _evidenceSequence = 0;
+
+  /// Incident corrective work needs before and after photos in the demo (a cleanliness Incident); other tasks only the note.
+  TaskEvidenceState _evidenceFor(StaffTask task) => _evidence[task.taskId] ??= TaskEvidenceState(
+        taskId: task.taskId,
+        requiresBefore: task.origin == TaskOrigin.incident,
+        requiresAfter: task.origin == TaskOrigin.incident,
+      );
+
+  StaffTask _ownTask(String taskId) =>
+      _tasks.value.where((t) => t.taskId == taskId).firstOrNull ?? (throw const OperationFailed('This task is no longer yours.'));
+
+  void _requireInProgress(StaffTask task) {
+    if (task.status != TaskStatus.inProgress) {
+      throw OperationFailed(task.status == TaskStatus.accepted
+          ? 'Start the task before adding evidence or submitting it.'
+          : 'Only a task in progress can take evidence or be submitted.');
+    }
+  }
+
+  TaskEvidenceState _withEvidence(TaskEvidenceState e, {List<EvidencePhoto>? drafts, List<TaskSubmission>? submissions, int? rejectionCount}) =>
+      _evidence[e.taskId] = TaskEvidenceState(
+        taskId: e.taskId,
+        requiresBefore: e.requiresBefore,
+        requiresAfter: e.requiresAfter,
+        rejectionCount: rejectionCount ?? e.rejectionCount,
+        drafts: drafts ?? e.drafts,
+        submissions: submissions ?? e.submissions,
+      );
+
+  @override
+  Future<TaskEvidenceState> taskEvidence(String taskId) async {
+    await _wait(latency);
+    final task = _tasks.value.where((t) => t.taskId == taskId).firstOrNull;
+    return _evidence[taskId] ?? (task == null ? TaskEvidenceState(taskId: taskId, requiresBefore: false, requiresAfter: false) : _evidenceFor(task));
+  }
+
+  @override
+  Future<TaskEvidenceState> uploadEvidence(String taskId, EvidenceKind kind, String filePath) async {
+    await _wait(latency);
+    final task = _ownTask(taskId);
+    _requireInProgress(task);
+    final e = _evidenceFor(task);
+    final photo = EvidencePhoto(evidenceId: 'ev-${++_evidenceSequence}', kind: kind, imageUrl: filePath, capturedAt: clock());
+    return _withEvidence(e, drafts: [for (final d in e.drafts) if (d.kind != kind) d, photo]);
+  }
+
+  @override
+  Future<TaskEvidenceState> removeEvidence(String taskId, String evidenceId) async {
+    await _wait(latency);
+    final e = _evidenceFor(_ownTask(taskId));
+    return _withEvidence(e, drafts: [for (final d in e.drafts) if (d.evidenceId != evidenceId) d]);
+  }
+
+  @override
+  Future<StaffTask> submitTask(String taskId, String note) async {
+    await _wait(latency);
+    final task = _ownTask(taskId);
+    if (task.status == TaskStatus.submitted) return task;
+    _requireInProgress(task);
+    if (note.trim().isEmpty) throw const OperationFailed('Completion note is required.');
+    final e = _evidenceFor(task);
+    for (final kind in EvidenceKind.values) {
+      if (e.requires(kind) && e.draft(kind) == null) throw OperationFailed('This task needs ${kind == EvidenceKind.before ? 'a before photo' : 'an after photo taken when the work is done'}.');
+    }
+    final submission = TaskSubmission(
+      submissionId: 'sub-${++_evidenceSequence}',
+      note: note.trim(),
+      submittedAt: clock(),
+      status: ReviewStatus.pending,
+      photos: e.drafts,
+    );
+    _withEvidence(e, drafts: const [], submissions: [submission, ...e.submissions]);
+    final submitted = task.copyWith(status: TaskStatus.submitted);
+    _replaceTask(submitted);
+    _refreshEligibility();
+    return submitted;
+  }
+
+  @override
+  Future<List<int>> evidenceImage(String imageUrl) => File(imageUrl).readAsBytes();
+
+  @override
+  String? reviewLatestSubmission({required bool approve}) {
+    final pending = [
+      for (final t in _tasks.value)
+        if (t.status == TaskStatus.submitted && _evidence[t.taskId]?.latest?.status == ReviewStatus.pending) t,
+    ];
+    if (pending.isEmpty) return 'No submitted task is waiting for verification. Submit one from its task detail first.';
+    final task = pending.reduce((a, b) => _evidence[a.taskId]!.latest!.submittedAt.isAfter(_evidence[b.taskId]!.latest!.submittedAt) ? a : b);
+    final e = _evidence[task.taskId]!;
+    final latest = e.latest!;
+    const reason = 'The area still needs attention. Check it again and add a clearer after photo.';
+    final decided = TaskSubmission(
+      submissionId: latest.submissionId,
+      note: latest.note,
+      submittedAt: latest.submittedAt,
+      status: approve ? ReviewStatus.verified : ReviewStatus.rejected,
+      rejectReason: approve ? null : reason,
+      photos: latest.photos,
+    );
+    final rejections = e.rejectionCount + (approve ? 0 : 1);
+    _withEvidence(e, submissions: [decided, ...e.submissions.skip(1)], rejectionCount: rejections);
+    if (approve) {
+      _replaceTask(task.copyWith(status: TaskStatus.verified));
+      _notify(NotificationKind.general, 'Task verified', '${task.title}: the Operator confirmed the work.', taskId: task.taskId);
+    } else if (rejections < 2) {
+      _replaceTask(task.copyWith(status: TaskStatus.inProgress));
+      _notify(NotificationKind.general, 'Rework needed', '${task.title}: $reason', taskId: task.taskId);
+    } else {
+      // BR-28: rejected twice, so the Operator gives it to someone else.
+      _tasks.value = [for (final t in _tasks.value) if (t.taskId != task.taskId) t];
+      _notify(NotificationKind.general, 'Task reassigned', '${task.title}: rejected twice. The Operator will assign it to someone else.');
+    }
+    _refreshEligibility();
+    return null;
   }
 
   // ------------------------------------------------------------ notifications

@@ -58,6 +58,19 @@ abstract class OperationsRepository {
   /// Starts work on an accepted (possibly deferred) task.
   Future<StaffTask> startTask(String taskId);
 
+  // Completion (MF-03): photos and a note, then an independent Operator verifies or rejects.
+  Future<TaskEvidenceState> taskEvidence(String taskId);
+
+  /// Uploads a photo into the draft; a second photo of the same kind replaces the first, so a retry never duplicates.
+  Future<TaskEvidenceState> uploadEvidence(String taskId, EvidenceKind kind, String filePath);
+  Future<TaskEvidenceState> removeEvidence(String taskId, String evidenceId);
+
+  /// In progress → Submitted. Refused with [OperationFailed] while required photos or the note are missing.
+  Future<StaffTask> submitTask(String taskId, String note);
+
+  /// Bytes of a photo the server holds ([EvidencePhoto.imageUrl]).
+  Future<List<int>> evidenceImage(String imageUrl);
+
   // Notifications
   Stream<List<AppNotification>> watchNotifications();
   Future<void> markAllRead();
@@ -81,6 +94,9 @@ abstract class DemoControls {
   /// task stays with the staff member. Returns why nothing changed, or null.
   String? clearLatestEvent();
   void completeActiveTasks();
+
+  /// The Operator verifies (or rejects for rework) the latest submitted task. Returns why nothing changed, or null.
+  String? reviewLatestSubmission({required bool approve});
 
   /// Moves the latest open swap request one step: the colleague answers my request, or the
   /// Manager decides a request the colleague accepted.

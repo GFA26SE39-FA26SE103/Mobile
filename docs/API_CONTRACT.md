@@ -37,6 +37,8 @@ not a routing gate. No Operator pre-dispatch review.
 | Task detail | `GET /api/tasks/{taskId}` |
 | Start | `POST /api/tasks/{taskId}/start` → `StaffTaskView` |
 | Inbox | `GET /api/me/notifications`; `POST /api/me/notifications/read-all` → `204` |
+| Evidence | `GET /api/tasks/{taskId}/evidence`; `POST /api/tasks/{taskId}/evidence` (multipart `file` + `type` BEFORE_PHOTO/AFTER_PHOTO); `DELETE /api/tasks/{taskId}/evidence/{evidenceId}`; photo bytes at the returned `imageUrl` (JWT) |
+| Submit | `POST /api/tasks/{taskId}/submit` `{ note }` → IN_PROGRESS to SUBMITTED |
 | Swaps | `GET /api/me/swap-requests`, `GET /api/me/shifts/{id}/swap-candidates?type=SWAP\|COVER`, `POST /api/swap-requests`, `POST /api/swap-requests/{id}/respond`, `POST /api/swap-requests/{id}/cancel` |
 
 Respond bodies:
@@ -83,10 +85,20 @@ attempt or priority changes. The countdown uses the server's `nextAlertAt` (retr
 `SystemSetting`, 10 s in the MF-02 demo); it is null on the last round, which the app shows as
 "Last offer" without inventing a time. Signing out disposes the repository, its timers and cached data.
 
+## Completion (MF-03)
+
+From a task in progress, **Complete task** opens the completion screen: a required completion note
+and before/after photo slots. Incident corrective tasks require an after photo, and a before photo
+when the Incident type requires it; other tasks only need the note. Each photo uploads as soon as it
+is picked; a failed upload keeps the picture and offers **Retry upload**, and uploading the same kind
+again replaces the draft on the server, so retries never duplicate evidence. Submit is enabled only
+when the note and every required photo are in. The Operator then verifies (task VERIFIED) or rejects
+with a reason (task back to IN_PROGRESS, shown as "Rework needed"); after a second rejection the
+task leaves this Staff member and the Operator assigns someone else. Server errors such as
+`EVIDENCE_REQUIRED`, `TASK_NOT_IN_PROGRESS` or `EVIDENCE_FORMAT_INVALID` are shown as sent.
+
 ## Not on the backend yet
 
-- Task completion evidence (upload/submit) and Operator verification. The app has no Done action
-  in real mode; Demo tools are only in demo mode.
 - StaffReport extraction/confirmation: the app keeps reports on the phone and marks the receipt
   "Preview only: not sent".
 - FCM device registration and push.
