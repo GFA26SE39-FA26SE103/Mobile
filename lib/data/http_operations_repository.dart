@@ -411,6 +411,7 @@ class HttpOperationsRepository implements OperationsRepository {
             fullName: (c['colleague'] as Map)['fullName'] as String,
             shift: c['shift'] == null ? null : _swapShiftOf(c['shift'] as Map),
             weeklyHoursAfter: (c['weeklyHoursAfter'] as num).toDouble(),
+            recommended: c['recommended'] as bool? ?? (c['weeklyHoursAfter'] as num) <= 40,
           ),
       ],
     );
@@ -481,6 +482,14 @@ class HttpOperationsRepository implements OperationsRepository {
             'type': type.code,
             'targetUserId': targetUserId,
             'targetShiftAssignmentId': type == SwapType.swap ? targetShiftId : null,
+            'reasonCode': reason?.code,
+            'note': note.trim().isEmpty ? null : note.trim(),
+          }))));
+
+  @override
+  Future<ShiftSwapRequest> requestManagerCover({required String shiftId, SwapReason? reason, String note = ''}) =>
+      _swapCall(() async => _keep(_swapOf(await _post('/api/me/swap-requests/manager-help', {
+            'requesterShiftAssignmentId': shiftId,
             'reasonCode': reason?.code,
             'note': note.trim().isEmpty ? null : note.trim(),
           }))));

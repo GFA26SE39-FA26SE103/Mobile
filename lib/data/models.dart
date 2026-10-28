@@ -636,6 +636,9 @@ class ShiftSwapRequest {
   /// The other person from my point of view.
   String get otherName => (sentByMe ? targetName : requesterName) ?? 'Colleague';
 
+  /// PENDING_MANAGER without a target is a Staff escalation asking the Manager to choose cover.
+  bool get managerNeedsToAssign => status == SwapStatus.pendingManager && targetId == null;
+
   /// What I hand over and what I get back if the request is approved.
   SwapShift? get iGive => sentByMe ? requesterShift : targetShift;
   SwapShift? get iGet => sentByMe ? targetShift : requesterShift;
@@ -643,7 +646,7 @@ class ShiftSwapRequest {
 
 /// A colleague who passes every swap rule, with the shift they would give back for a SWAP.
 class SwapCandidate {
-  const SwapCandidate({required this.userId, required this.fullName, required this.weeklyHoursAfter, this.shift});
+  const SwapCandidate({required this.userId, required this.fullName, required this.weeklyHoursAfter, this.shift, this.recommended = true});
 
   final String userId;
   final String fullName;
@@ -651,6 +654,7 @@ class SwapCandidate {
 
   /// The colleague's hours that week if the request is approved.
   final double weeklyHoursAfter;
+  final bool recommended;
 }
 
 class SwapCandidates {

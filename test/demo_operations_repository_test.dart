@@ -390,6 +390,20 @@ void main() {
       });
     });
 
+    test('staff can ask the Manager to assign cover without choosing a colleague', () {
+      withRepo(start, (async, repo) {
+        final request = run(async, repo.requestManagerCover(
+          shiftId: 'shift-3',
+          reason: SwapReason.health,
+          note: 'Nobody accepted',
+        ));
+        expect(request.status, SwapStatus.pendingManager);
+        expect(request.managerNeedsToAssign, isTrue);
+        expect(request.targetId, isNull);
+        expect(request.canCancel, isTrue);
+      });
+    });
+
     test('the requester can cancel while the colleague has not answered', () {
       withRepo(start, (async, repo) {
         final request = run(async, repo.requestShiftSwap(shiftId: 'shift-4', type: SwapType.cover, targetUserId: 'u-lan', reason: SwapReason.health));

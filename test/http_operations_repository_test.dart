@@ -345,6 +345,31 @@ void main() {
     );
   });
 
+  test('staff can ask the Manager to choose cover without selecting a colleague', () async {
+    final (:repo, :api) = build();
+    await repo.refresh();
+    api.on('POST /api/me/swap-requests/manager-help', (_) => {
+          ...swapJson(status: 'PENDING_MANAGER'),
+          'type': 'COVER',
+          'target': null,
+          'targetShift': null,
+        });
+
+    final request = await repo.requestManagerCover(
+      shiftId: 'sa-1',
+      reason: SwapReason.health,
+      note: 'Cannot find anyone',
+    );
+
+    expect(request.managerNeedsToAssign, isTrue);
+    expect(request.targetId, isNull);
+    expect(api.calls.last.data, {
+      'requesterShiftAssignmentId': 'sa-1',
+      'reasonCode': 'HEALTH',
+      'note': 'Cannot find anyone',
+    });
+  });
+
   test('a received request is mine to answer, and a failed first load shows as an error', () async {
     final (:repo, :api) = build();
     api.on('GET /api/me/swap-requests', (_) => [swapJson(viewerRole: 'TARGET')]);

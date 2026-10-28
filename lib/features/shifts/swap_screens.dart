@@ -54,6 +54,9 @@ class _Label extends StatelessWidget {
 
 Pill? swapPill(BuildContext context, ShiftSwapRequest r) {
   final c = context.colors;
+  if (r.managerNeedsToAssign) {
+    return Pill(ellipsis: true, label: 'Manager finding cover', fg: c.warning, bg: c.warningTint, dot: true);
+  }
   return switch (r.status) {
     SwapStatus.pendingPeer => r.sentByMe
         ? Pill(ellipsis: true, label: 'Swap: waiting for ${r.otherName}', fg: c.warning, bg: c.warningTint, dot: true)
@@ -144,6 +147,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
   SwapCandidate? _picked;
   bool _details = false;
   SwapReason? _reason;
+  bool _managerHelp = false;
   bool _sending = false;
   String? _error;
 
@@ -158,21 +162,28 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
       setState(() => _error = 'Choose a reason for the swap.');
       return;
     }
-    final picked = _picked!;
     setState(() {
       _sending = true;
       _error = null;
     });
     try {
-      // The screen switches to the request's progress once the repository has it.
-      await ref.read(operationsRepositoryProvider).requestShiftSwap(
-            shiftId: widget.shift.shiftId,
-            type: _type,
-            targetUserId: picked.userId,
-            targetShiftId: picked.shift?.shiftId,
-            reason: _reason,
-            note: _note.text,
-          );
+      if (_managerHelp) {
+        await ref.read(operationsRepositoryProvider).requestManagerCover(
+              shiftId: widget.shift.shiftId,
+              reason: _reason,
+              note: _note.text,
+            );
+      } else {
+        final picked = _picked!;
+        await ref.read(operationsRepositoryProvider).requestShiftSwap(
+              shiftId: widget.shift.shiftId,
+              type: _type,
+              targetUserId: picked.userId,
+              targetShiftId: picked.shift?.shiftId,
+              reason: _reason,
+              note: _note.text,
+            );
+      }
     } on SwapNotAllowed catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
@@ -209,8 +220,8 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
     }
     return Scaffold(
       appBar: AppBar(
-        title: Text(_details ? 'Swap request' : 'Choose a colleague'),
-        leading: _details ? BackButton(onPressed: () => setState(() => _details = false)) : null,
+        title: Text(_details ? (_managerHelp ? 'Ask Manager for cover' : 'Swap request') : 'Choose a colleague'),
+        leading: _details ? BackButton(onPressed: () => setState(() { _details = false; _managerHelp = false; })) : null,
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -239,6 +250,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
             onSelected: (_) => setState(() {
               _type = t;
               _picked = null;
+              _managerHelp = false;
             }),
           ),
       ]),
@@ -287,7 +299,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
               Text('Only eligible colleagues are listed', style: TextStyle(color: c.primary, fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
               Text(
-                'Free at both shift times, within 48 h a week and not on leave.'
+                'Free at both shift times, at or below the 48 h hard limit and not on leave. Up to 40 h is recommended.'
                 '${data.hiddenCount > 0 ? ' ${data.hiddenCount} colleague${data.hiddenCount == 1 ? ' is' : 's are'} hidden.' : ''}'
                 ' The request must be decided by ${_when(data.deadline)}, or you keep this shift.',
                 style: theme.bodySmall,
@@ -298,8 +310,14 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
       ),
       const SizedBox(height: 18),
       FilledButton(
-        onPressed: _picked == null ? null : () => setState(() => _details = true),
+        onPressed: _picked == null ? null : () => setState(() { _managerHelp = false; _details = true; }),
         child: Text(_picked == null ? 'Choose a colleague' : 'Choose ${_picked!.fullName}'),
+      ),
+      const SizedBox(height: 10),
+      OutlinedButton.icon(
+        onPressed: () => setState(() { _managerHelp = true; _picked = null; _type = SwapType.cover; _details = true; }),
+        icon: const Icon(Icons.support_agent),
+        label: const Text('Ask Manager to assign cover'),
       ),
       const SizedBox(height: 10),
       OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Back to my shifts')),
@@ -308,24 +326,31 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
 
   List<Widget> _detailsStep(Widget mine) {
     final theme = Theme.of(context).textTheme;
-    final picked = _picked!;
-    final theirs = picked.shift;
+    final picked = _picked;
+    final theirs = picked?.shift;
     return [
       mine,
-      _Label(theirs == null ? 'Covered by' : 'In exchange'),
-      if (theirs != null)
+      _Label(_managerHelp ? 'Who decides' : theirs == null ? 'Covered by' : 'In exchange'),
+      if (_managerHelp)
+        AppCard(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Manager assigns an eligible Staff member', style: theme.titleMedium),
+            Text('No colleague acceptance is needed. Your shift stays unchanged until the Manager assigns cover.', style: theme.bodySmall),
+          ]),
+        )
+      else if (theirs != null)
         _ShiftCard(
           caption: _caption('You get', theirs.start, theirs.label),
           start: theirs.start,
           end: theirs.end,
           zoneName: theirs.zoneName,
-          footnote: "${picked.fullName}'s shift",
+          footnote: "${picked!.fullName}'s shift",
         )
       else
         AppCard(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(picked.fullName, style: theme.titleMedium),
-            Text('Takes your shift · ${_hours(picked.weeklyHoursAfter)} / 48 h that week', style: theme.bodySmall),
+            Text(picked!.fullName, style: theme.titleMedium),
+            Text('Takes your shift · ${_workload(picked.weeklyHoursAfter, picked.recommended)}', style: theme.bodySmall),
           ]),
         ),
       const _Label('Why do you need a swap?'),
@@ -341,10 +366,17 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
         maxLength: 200,
         textCapitalization: TextCapitalization.sentences,
         decoration: InputDecoration(
-          hintText: _reason == SwapReason.other ? 'Required: tell ${picked.fullName} and the Manager why' : 'Note for ${picked.fullName} (optional)',
+          hintText: _managerHelp
+              ? 'Add context so the Manager can choose suitable cover (optional)'
+              : _reason == SwapReason.other ? 'Required: tell ${picked!.fullName} and the Manager why' : 'Note for ${picked!.fullName} (optional)',
         ),
       ),
-      FactLine(icon: Icons.info_outline, text: '${picked.fullName} answers first, then the Manager decides. You keep this shift until it is approved.'),
+      FactLine(
+        icon: Icons.info_outline,
+        text: _managerHelp
+            ? 'The Manager chooses and assigns cover directly. You receive a notification when the schedule changes.'
+            : '${picked!.fullName} answers first, then the Manager decides. You keep this shift until it is approved.',
+      ),
       if (_error != null) ...[
         const SizedBox(height: 12),
         InfoBanner(tone: BannerTone.danger, icon: Icons.error_outline, title: _error!),
@@ -352,12 +384,13 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
       const SizedBox(height: 18),
       FilledButton(onPressed: _sending ? null : _send, child: Text(_sending ? 'Sending…' : 'Send request')),
       const SizedBox(height: 10),
-      OutlinedButton(onPressed: _sending ? null : () => setState(() => _details = false), child: const Text('Back')),
+      OutlinedButton(onPressed: _sending ? null : () => setState(() { _details = false; _managerHelp = false; }), child: const Text('Back')),
     ];
   }
 }
 
 String _hours(double h) => h == h.roundToDouble() ? '${h.toInt()}' : h.toStringAsFixed(1);
+String _workload(double h, bool recommended) => '${_hours(h)} / 48 h · ${recommended ? 'recommended' : 'high workload'}';
 
 class _CandidateCard extends StatelessWidget {
   const _CandidateCard({required this.candidate, required this.selected, required this.onTap});
@@ -386,7 +419,7 @@ class _CandidateCard extends StatelessWidget {
             if (selected) ...[Icon(Icons.check, size: 20, color: c.primary), const SizedBox(width: 4)],
             Expanded(child: Text(candidate.fullName, style: theme.titleMedium)),
           ]),
-          Text('${shift?.zoneName ?? 'Free at your shift time'} · ${_hours(candidate.weeklyHoursAfter)} / 48 h that week', style: theme.bodySmall),
+          Text('${shift?.zoneName ?? 'Free at your shift time'} · ${_workload(candidate.weeklyHoursAfter, candidate.recommended)}', style: theme.bodySmall),
         ]),
       ),
     );
@@ -448,7 +481,7 @@ class _SwapProgressViewState extends ConsumerState<SwapProgressView> {
         _ShiftCard(caption: _caption('You give', give.start, give.label), start: give.start, end: give.end, zoneName: give.zoneName)
       else
         AppCard(child: Text('You give nothing back: ${r.otherName} asks you to cover their shift.', style: theme.bodyMedium)),
-      _Label(get == null ? 'Covered by' : give == null ? 'You would take' : 'In exchange'),
+      _Label(r.managerNeedsToAssign ? 'Cover assignment' : get == null ? 'Covered by' : give == null ? 'You would take' : 'In exchange'),
       if (get != null)
         _ShiftCard(
           caption: _caption(give == null ? 'You take' : 'You get', get.start, get.label),
@@ -457,6 +490,8 @@ class _SwapProgressViewState extends ConsumerState<SwapProgressView> {
           zoneName: get.zoneName,
           footnote: "${r.otherName}'s shift",
         )
+      else if (r.managerNeedsToAssign)
+        AppCard(child: Text('The Manager is choosing an eligible Staff member. Your schedule has not changed yet.', style: theme.bodyMedium))
       else
         AppCard(child: Text('${r.otherName} covers your shift. Nothing comes back to you.', style: theme.bodyMedium)),
       if (!r.sentByMe && (r.reason != null || r.note.isNotEmpty)) ...[
@@ -471,7 +506,9 @@ class _SwapProgressViewState extends ConsumerState<SwapProgressView> {
           color: c.primaryTint,
           borderColor: c.primaryTint,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(r.canRespond ? 'After you accept, the Manager approves' : 'Keep this shift until it is approved',
+            Text(r.managerNeedsToAssign
+                ? 'The Manager will assign cover directly'
+                : r.canRespond ? 'After you accept, the Manager approves' : 'Keep this shift until it is approved',
                 style: TextStyle(color: c.primary, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
             Text('Shifts change only after approval. Not decided by ${_when(deadline)}: the request expires and the schedule stays as it is.',
@@ -523,6 +560,7 @@ class _ProgressCard extends StatelessWidget {
     final accepted = r.targetRespondedAt != null && r.status != SwapStatus.declinedByPeer;
     final steps = <(bool?, String)>[
       (true, '${r.sentByMe ? 'Sent' : 'Sent by ${r.otherName}'} · ${_when(r.submittedAt)}'),
+      if (r.managerNeedsToAssign) (null, 'Manager selects and assigns cover'),
       if (r.status == SwapStatus.declinedByPeer)
         (false, '$peer declined${r.targetRespondedAt == null ? '' : ' · ${_when(r.targetRespondedAt!)}'}')
       else if (accepted)
@@ -536,12 +574,12 @@ class _ProgressCard extends StatelessWidget {
         (false, 'Cancelled${r.cancelledBy == null ? '' : ' by ${r.cancelledBy}'}${r.cancellationReason == null ? '' : ': ${r.cancellationReason}'}'),
       if (r.status == SwapStatus.expired) (false, 'Expired${r.expiresAt == null ? '' : ' · ${_when(r.expiresAt!)}'}: not decided in time'),
     ];
-    final step = switch (r.status) {
+    final step = r.managerNeedsToAssign ? 'MANAGER ASSIGNMENT' : switch (r.status) {
       SwapStatus.pendingPeer => 'STEP 1 OF 2',
       SwapStatus.pendingManager => 'STEP 2 OF 2',
       _ => 'DONE',
     };
-    final title = switch (r.status) {
+    final title = r.managerNeedsToAssign ? 'Manager is finding cover' : switch (r.status) {
       SwapStatus.pendingPeer => r.sentByMe ? 'Waiting for ${r.otherName}' : 'Waiting for your answer',
       SwapStatus.pendingManager => 'Waiting for the Manager',
       SwapStatus.approved => r.type == SwapType.cover && r.sentByMe ? '${r.otherName} covers this shift' : 'Swap approved',

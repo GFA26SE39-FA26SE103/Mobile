@@ -26,6 +26,14 @@ abstract class OperationsRepository {
     String note = '',
   });
 
+  /// Escalates a COVER request to the Manager when Staff cannot find a colleague.
+  /// The Manager selects an eligible replacement; no colleague acceptance is required.
+  Future<ShiftSwapRequest> requestManagerCover({
+    required String shiftId,
+    SwapReason? reason,
+    String note = '',
+  });
+
   /// The colleague's answer to a request sent to them.
   Future<ShiftSwapRequest> respondToSwap(String requestId, {required bool accept});
 

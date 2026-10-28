@@ -352,6 +352,23 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
     );
   }
 
+  ShiftSwapRequest _withCoverTarget(ShiftSwapRequest r, (String, String) target) => ShiftSwapRequest(
+        requestId: r.requestId,
+        type: r.type,
+        status: r.status,
+        requesterId: r.requesterId,
+        requesterName: r.requesterName,
+        requesterShift: r.requesterShift,
+        targetId: target.$1,
+        targetName: target.$2,
+        reason: r.reason,
+        note: r.note,
+        submittedAt: r.submittedAt,
+        expiresAt: r.expiresAt,
+        sentByMe: r.sentByMe,
+        canCancel: r.canCancel,
+      );
+
   void _replaceSwap(ShiftSwapRequest next) => _swaps.value = [for (final r in _swaps.value) r.requestId == next.requestId ? next : r];
 
   ShiftSwapRequest _swap(String requestId) {
@@ -405,6 +422,31 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
   }
 
   @override
+  Future<ShiftSwapRequest> requestManagerCover({required String shiftId, SwapReason? reason, String note = ''}) async {
+    await _wait(latency);
+    final shift = _ownShift(shiftId);
+    _checkOpenForSwap(shift);
+    if (_hasOpenSwap(shiftId)) throw const SwapNotAllowed('This shift already has a pending swap request.');
+    final request = ShiftSwapRequest(
+      requestId: 'swap-${++_swapSequence}',
+      type: SwapType.cover,
+      status: SwapStatus.pendingManager,
+      requesterId: _me,
+      requesterName: staffName,
+      requesterShift: _swapShiftOf(shift),
+      reason: reason,
+      note: note.trim(),
+      submittedAt: clock(),
+      expiresAt: shift.start,
+      sentByMe: true,
+      canCancel: true,
+    );
+    _swaps.value = [request, ..._swaps.value];
+    _notify(NotificationKind.swapUpdated, 'Manager assistance requested', 'A Manager will choose an eligible Staff member for your shift.');
+    return request;
+  }
+
+  @override
   Future<ShiftSwapRequest> respondToSwap(String requestId, {required bool accept}) async {
     await _wait(latency);
     final request = _swap(requestId);
@@ -426,7 +468,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
 
   @override
   String? advanceLatestSwap({required bool approve}) {
-    final request = _swaps.value.where((r) => r.status.isOpen).firstOrNull;
+    var request = _swaps.value.where((r) => r.status.isOpen).firstOrNull;
     if (request == null) return 'There is no pending swap request.';
     if (request.status == SwapStatus.pendingPeer) {
       if (!request.sentByMe) return 'This request is waiting for your answer. Open it under Shifts → Swap requests.';
@@ -435,6 +477,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
           approve ? 'Your swap request now waits for the Manager.' : 'You keep your shift.');
       return null;
     }
+    if (request.managerNeedsToAssign && approve) request = _withCoverTarget(request, _colleagues.first);
     if (!approve) {
       _replaceSwap(_withStatus(request, SwapStatus.rejected, decisionNote: 'Zone B would drop below the minimum staff for that shift.'));
       _notify(NotificationKind.swapUpdated, 'Swap request rejected', 'The Manager kept the schedule as it is.');
