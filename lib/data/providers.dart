@@ -77,14 +77,36 @@ final unreadCountProvider = Provider<int>(
   (ref) => ref.watch(notificationsProvider).valueOrNull?.where((n) => !n.read).length ?? 0,
 );
 
-/// Today's shift, if the staff member has one.
+/// Select the shift that should drive today's staff actions.
+///
+/// A staff member can have more than one non-overlapping shift on the same day.
+/// Prefer the shift they are currently checked in to, then a shift in progress,
+/// then the next shift whose check-in window is open, and finally the next
+/// upcoming shift. An ended shift must not hide a later shift's check-in action.
+Shift? primaryShiftForToday(Iterable<Shift> shifts, DateTime now) {
+  final today = shifts.where((s) => s.isTodayAt(now)).toList()..sort((a, b) => a.start.compareTo(b.start));
+  if (today.isEmpty) return null;
+
+  final remaining = today.where((s) => now.isBefore(s.end)).toList();
+  if (remaining.isEmpty) return today.last;
+
+  for (final shift in remaining) {
+    if (shift.isCheckedIn && shift.isActiveAt(now)) return shift;
+  }
+  for (final shift in remaining) {
+    if (shift.isActiveAt(now)) return shift;
+  }
+  for (final shift in remaining) {
+    if (!now.isBefore(shift.checkInOpensAt)) return shift;
+  }
+  return remaining.first;
+}
+
+/// Today's primary shift, if the staff member has one.
 final todayShiftProvider = Provider<Shift?>((ref) {
   final now = ref.watch(clockProvider)();
   final shifts = ref.watch(shiftsProvider).valueOrNull ?? const [];
-  for (final s in shifts) {
-    if (s.isTodayAt(now)) return s;
-  }
-  return null;
+  return primaryShiftForToday(shifts, now);
 });
 
 /// The latest request I sent for each of my shifts.
