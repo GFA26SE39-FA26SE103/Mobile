@@ -390,6 +390,20 @@ void main() {
       });
     });
 
+    test('staff can ask the Manager to assign cover without choosing a colleague', () {
+      withRepo(start, (async, repo) {
+        final request = run(async, repo.requestManagerCover(
+          shiftId: 'shift-3',
+          reason: SwapReason.health,
+          note: 'Nobody accepted',
+        ));
+        expect(request.status, SwapStatus.pendingManager);
+        expect(request.managerNeedsToAssign, isTrue);
+        expect(request.targetId, isNull);
+        expect(request.canCancel, isTrue);
+      });
+    });
+
     test('the requester can cancel while the colleague has not answered', () {
       withRepo(start, (async, repo) {
         final request = run(async, repo.requestShiftSwap(shiftId: 'shift-4', type: SwapType.cover, targetUserId: 'u-lan', reason: SwapReason.health));
@@ -417,6 +431,26 @@ void main() {
         expect(accepted.canCancel, isTrue);
         expect(failure(async, repo.respondToSwap(received.requestId, accept: false)), isA<SwapNotAllowed>());
       });
+    });
+  });
+
+  test('completion: the note is required, two rejections hand the task to someone else', () {
+    withRepo(DateTime(2026, 10, 20, 10), (async, repo) {
+      // The seeded staff-report task, accepted for later.
+      const id = 'task-2031';
+      expect(failure(async, repo.submitTask(id, 'Done')), isA<OperationFailed>());
+      run(async, repo.startTask(id));
+      expect(failure(async, repo.submitTask(id, ' ')), isA<OperationFailed>());
+      expect(run(async, repo.submitTask(id, 'Rack refilled')).status, TaskStatus.submitted);
+
+      expect(repo.reviewLatestSubmission(approve: false), isNull);
+      expect(run(async, repo.watchTasks().first).firstWhere((t) => t.taskId == id).status, TaskStatus.inProgress);
+      expect(run(async, repo.taskEvidence(id)).latest!.status, ReviewStatus.rejected);
+
+      run(async, repo.submitTask(id, 'Rack refilled and tidied'));
+      expect(repo.reviewLatestSubmission(approve: false), isNull);
+      expect(run(async, repo.watchTasks().first).where((t) => t.taskId == id), isEmpty);
+      expect(repo.reviewLatestSubmission(approve: true), isNotNull);
     });
   });
 }

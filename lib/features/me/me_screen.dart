@@ -120,6 +120,18 @@ class MeScreen extends ConsumerWidget {
                 icon: const Icon(Icons.done_all),
                 label: const Text('Submit my active tasks'),
               ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => report(demo.reviewLatestSubmission(approve: true), 'The Operator verified your latest submission.'),
+                icon: const Icon(Icons.verified_outlined),
+                label: const Text('Operator verifies latest submission'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => report(demo.reviewLatestSubmission(approve: false), 'The Operator asked for rework on your latest submission.'),
+                icon: const Icon(Icons.replay),
+                label: const Text('Operator rejects latest submission'),
+              ),
             ]),
           ),
         ],

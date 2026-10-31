@@ -411,6 +411,7 @@ class HttpOperationsRepository implements OperationsRepository {
             fullName: (c['colleague'] as Map)['fullName'] as String,
             shift: c['shift'] == null ? null : _swapShiftOf(c['shift'] as Map),
             weeklyHoursAfter: (c['weeklyHoursAfter'] as num).toDouble(),
+            recommended: c['recommended'] as bool? ?? (c['weeklyHoursAfter'] as num) <= 40,
           ),
       ],
     );
@@ -481,6 +482,14 @@ class HttpOperationsRepository implements OperationsRepository {
             'type': type.code,
             'targetUserId': targetUserId,
             'targetShiftAssignmentId': type == SwapType.swap ? targetShiftId : null,
+            'reasonCode': reason?.code,
+            'note': note.trim().isEmpty ? null : note.trim(),
+          }))));
+
+  @override
+  Future<ShiftSwapRequest> requestManagerCover({required String shiftId, SwapReason? reason, String note = ''}) =>
+      _swapCall(() async => _keep(_swapOf(await _post('/api/me/swap-requests/manager-help', {
+            'requesterShiftAssignmentId': shiftId,
             'reasonCode': reason?.code,
             'note': note.trim().isEmpty ? null : note.trim(),
           }))));
@@ -569,6 +578,83 @@ class HttpOperationsRepository implements OperationsRepository {
       throw OperationFailed(f.message);
     }
   }
+
+  // ---------------------------------------------------------------- completion
+
+  static EvidencePhoto _photoOf(Map json) => EvidencePhoto(
+        evidenceId: json['evidenceId'] as String,
+        kind: EvidenceKind.fromCode(json['evidenceType'] as String),
+        imageUrl: json['imageUrl'] as String,
+        capturedAt: _time(json['capturedAt']),
+      );
+
+  static TaskEvidenceState _evidenceOf(Object? data) {
+    final json = data as Map;
+    return TaskEvidenceState(
+      taskId: json['taskId'] as String,
+      requiresBefore: json['requiresBeforePhoto'] as bool,
+      requiresAfter: json['requiresAfterPhoto'] as bool,
+      rejectionCount: (json['rejectionCount'] as int?) ?? 0,
+      drafts: [for (final p in json['drafts'] as List) _photoOf(p as Map)],
+      submissions: [
+        for (final s in json['submissions'] as List)
+          TaskSubmission(
+            submissionId: (s as Map)['submissionId'] as String,
+            note: s['note'] as String,
+            submittedAt: _time(s['submittedAt']),
+            status: switch (s['reviewStatus']) {
+              'VERIFIED' => ReviewStatus.verified,
+              'REJECTED' => ReviewStatus.rejected,
+              _ => ReviewStatus.pending,
+            },
+            rejectReason: s['rejectReason'] as String?,
+            photos: [for (final p in s['photos'] as List) _photoOf(p as Map)],
+          ),
+      ],
+    );
+  }
+
+  Future<T> _completionCall<T>(Future<T> Function() body) async {
+    try {
+      return await body();
+    } on _Failure catch (f) {
+      unawaited(_tasks.refresh());
+      throw OperationFailed(f.message);
+    }
+  }
+
+  @override
+  Future<TaskEvidenceState> taskEvidence(String taskId) => _completionCall(() async => _evidenceOf(await _get('/api/tasks/$taskId/evidence')));
+
+  @override
+  Future<TaskEvidenceState> uploadEvidence(String taskId, EvidenceKind kind, String filePath) => _completionCall(() async {
+        final name = filePath.split(RegExp(r'[\\/]')).last;
+        final png = name.toLowerCase().endsWith('.png');
+        final form = FormData.fromMap({
+          'type': kind.code,
+          'file': await MultipartFile.fromFile(filePath, filename: name, contentType: DioMediaType('image', png ? 'png' : 'jpeg')),
+        });
+        return _evidenceOf(await _post('/api/tasks/$taskId/evidence', form));
+      });
+
+  @override
+  Future<TaskEvidenceState> removeEvidence(String taskId, String evidenceId) =>
+      _completionCall(() async => _evidenceOf(await _call(() => _dio.delete<Object?>('/api/tasks/$taskId/evidence/$evidenceId'))));
+
+  @override
+  Future<StaffTask> submitTask(String taskId, String note) => _completionCall(() async {
+        await _post('/api/tasks/$taskId/submit', {'note': note.trim()});
+        await _tasks.refresh();
+        _refreshFast();
+        return (_tasks.value ?? const <StaffTask>[]).firstWhere((t) => t.taskId == taskId,
+            orElse: () => throw const OperationFailed('The task was submitted but could not be reloaded. Pull to refresh.'));
+      });
+
+  @override
+  Future<List<int>> evidenceImage(String imageUrl) => _completionCall(() async {
+        final data = await _call(() => _dio.get<Object?>(imageUrl, options: Options(responseType: ResponseType.bytes)));
+        return (data as List<int>?) ?? const <int>[];
+      });
 
   // ------------------------------------------------------------- notifications
 

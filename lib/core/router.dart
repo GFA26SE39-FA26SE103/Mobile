@@ -13,6 +13,7 @@ import '../features/me/me_screen.dart';
 import '../features/report/report_screens.dart';
 import '../features/shifts/shifts_screens.dart';
 import '../features/shifts/swap_screens.dart';
+import '../features/tasks/complete_task_screen.dart';
 import '../features/tasks/tasks_screens.dart';
 
 class _AuthListenable extends ChangeNotifier {
@@ -69,7 +70,13 @@ final routerProvider = Provider<GoRouter>((ref) {
             GoRoute(
               path: '/tasks',
               builder: (_, _) => const MyTasksScreen(),
-              routes: [GoRoute(path: ':taskId', builder: (_, s) => TaskDetailScreen(taskId: s.pathParameters['taskId']!))],
+              routes: [
+                GoRoute(
+                  path: ':taskId',
+                  builder: (_, s) => TaskDetailScreen(taskId: s.pathParameters['taskId']!),
+                  routes: [GoRoute(path: 'complete', builder: (_, s) => CompleteTaskScreen(taskId: s.pathParameters['taskId']!))],
+                ),
+              ],
             ),
           ]),
           StatefulShellBranch(routes: [
