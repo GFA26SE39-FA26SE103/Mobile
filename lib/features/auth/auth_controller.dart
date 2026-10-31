@@ -37,7 +37,9 @@ class SessionExpired extends AuthState {
 /// The three real steps behind the "Signing in…" screen.
 enum SignInStage { credentials, permissions, session }
 
-final authControllerProvider = NotifierProvider<AuthController, AuthState>(AuthController.new);
+final authControllerProvider = NotifierProvider<AuthController, AuthState>(
+  AuthController.new,
+);
 
 class AuthController extends Notifier<AuthState> {
   Timer? _expiryTimer;
@@ -90,9 +92,15 @@ class AuthController extends Notifier<AuthState> {
       final session = await repo.login(email.trim(), password);
       onStage?.call(SignInStage.permissions);
       final user = await repo.me(session.accessToken);
-      if (!user.isActive) throw const SignInFailure('This account is disabled. Contact your shift manager.');
+      if (!user.isActive) {
+        throw const SignInFailure(
+          'This account is disabled. Contact your shift manager.',
+        );
+      }
       if (!user.isStaff) {
-        throw SignInFailure('This app is for store staff. ${_roleName(user.role)} accounts use the web console.');
+        throw SignInFailure(
+          'This app is for store staff. ${_roleName(user.role)} accounts use the web console.',
+        );
       }
       onStage?.call(SignInStage.session);
       final verified = session.withUser(user);
@@ -119,6 +127,7 @@ class AuthController extends Notifier<AuthState> {
   Future<void> signOut() async {
     _expiryTimer?.cancel();
     final email = state is SignedIn ? state.session!.user.email : null;
+    await ref.read(pushRegistrationProvider).revoke();
     await ref.read(sessionStoreProvider).clear();
     state = SignedOut(email: email);
   }
@@ -130,13 +139,20 @@ class AuthController extends Notifier<AuthState> {
     state = SignedIn(session);
   }
 
-  static String _roleName(String role) => role.isEmpty ? role : role[0] + role.substring(1).toLowerCase();
+  static String _roleName(String role) =>
+      role.isEmpty ? role : role[0] + role.substring(1).toLowerCase();
 
   static String _messageFor(ApiException e) {
     if (e.isNetwork) return e.message;
-    if (e.status == 429) return 'Too many attempts. Wait a few minutes, then try again.';
-    if (e.code == 'ACCOUNT_DISABLED') return 'This account is disabled. Contact your shift manager.';
-    if (e.status == 401 || e.code == 'INVALID_CREDENTIALS') return 'Email or password is incorrect.';
+    if (e.status == 429) {
+      return 'Too many attempts. Wait a few minutes, then try again.';
+    }
+    if (e.code == 'ACCOUNT_DISABLED') {
+      return 'This account is disabled. Contact your shift manager.';
+    }
+    if (e.status == 401 || e.code == 'INVALID_CREDENTIALS') {
+      return 'Email or password is incorrect.';
+    }
     if (e.status == 400) return 'Enter a valid email and password.';
     return 'Sign-in failed (${e.status}). Try again in a moment.';
   }
