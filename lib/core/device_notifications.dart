@@ -242,7 +242,7 @@ class NotificationRelay {
         offer.raisedFrom != null && offer.priority == Severity.critical
         ? 'Now CRITICAL · $zone'
         : offer.attempt > 1
-        ? 'Still waiting · offer ${offer.attempt} of ${offer.maxAttempts}'
+        ? 'Still waiting · ${offer.roundLabel}'
         : 'New task · $zone';
     final where = offer.location.isEmpty ? zone : offer.location;
     notifier.show(

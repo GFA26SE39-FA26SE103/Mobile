@@ -2,7 +2,8 @@
 // Measurement → OperationalEvent → ResponsePolicy → Task offer / qualified Incident,
 // plus the separate confirmed StaffReport path.
 
-/// Priority of an OperationalEvent or severity of a qualified Incident.
+/// Alert level shown to Staff: OperationalEvent/Task priority and Notification.Severity.
+/// V7 has no Incident severity; this is not one.
 enum Severity {
   critical('CRITICAL'),
   warning('WARNING'),
@@ -104,10 +105,10 @@ class Eligibility {
   bool get canReceiveOffers => checkedIn && !atWorkloadLimit;
 }
 
-/// `eventCleared`: the OperationalEvent episode recovered before anyone accepted (server
-/// `WITHDRAWN` + `EVENT_CLEARED`). `withdrawn`: closed for another reason, e.g. the Operator
-/// assigned the task by hand (`MANUALLY_ASSIGNED`). `escalated`: nobody accepted (`EXPIRED`).
-enum OfferStatus { open, takenByOther, accepted, declined, escalated, eventCleared, withdrawn }
+/// TaskOffer V7: `PENDING` is [open]; `CANCELLED` splits by `closedReason` into [takenByOther],
+/// [eventCleared] (the OperationalEvent recovered before anyone accepted) and [withdrawn] (any
+/// other reason). `expired`: this Staff member did not respond in time, which is not a decline.
+enum OfferStatus { open, takenByOther, accepted, declined, expired, eventCleared, withdrawn }
 
 /// A Task offered to eligible zone staff. The first valid acceptance wins (BR-21).
 class TaskOffer {
@@ -133,6 +134,8 @@ class TaskOffer {
     this.eventTypeCode,
     this.raisedFrom,
     this.eventClearedAt,
+    this.expiresAt,
+    this.dispatchScope,
   });
 
   /// BR-22: re-notify every 60 s up to the configured limit, then the Operator assigns manually.
@@ -173,7 +176,16 @@ class TaskOffer {
   final Severity? raisedFrom;
   final DateTime? eventClearedAt;
 
+  /// TaskOffer V7 `expires_at`: when this offer ends for this Staff member.
+  final DateTime? expiresAt;
+
+  /// TaskOffer V7 `dispatch_scope`: how far the search has reached.
+  final String? dispatchScope;
+
   bool get isOpen => status == OfferStatus.open;
+
+  /// V7 widens the search in waves with no fixed limit, so there is no "of N" once it applies.
+  String get roundLabel => expiresAt != null ? 'offer round $attempt' : 'offer $attempt of $maxAttempts';
 
   TaskOffer copyWith({
     int? attempt,
@@ -185,6 +197,7 @@ class TaskOffer {
     String? measurement,
     Severity? raisedFrom,
     DateTime? eventClearedAt,
+    DateTime? expiresAt,
   }) =>
       TaskOffer(
         offerId: offerId,
@@ -208,6 +221,8 @@ class TaskOffer {
         eventTypeCode: eventTypeCode,
         raisedFrom: raisedFrom ?? this.raisedFrom,
         eventClearedAt: eventClearedAt ?? this.eventClearedAt,
+        expiresAt: expiresAt ?? this.expiresAt,
+        dispatchScope: dispatchScope,
       );
 }
 
@@ -219,12 +234,15 @@ enum TaskResponse { handleNow, handleLater, cannotHandle }
 const handleLaterOptions = [Duration(minutes: 5), Duration(minutes: 10), Duration(minutes: 15), Duration(minutes: 30)];
 
 enum DeclineReason {
-  busy('Busy with another task'),
-  onBreak('On break'),
-  notNearZone('Not near the zone'),
-  notQualified('Not trained for this task');
+  busy('BUSY', 'Busy with another task'),
+  unavailable('UNAVAILABLE', 'Unavailable'),
+  notQualified('NOT_QUALIFIED', 'Not qualified'),
+  other('OTHER', 'Other');
 
-  const DeclineReason(this.label);
+  const DeclineReason(this.code, this.label);
+
+  /// TaskOffer V7 `decline_reason_code`.
+  final String code;
   final String label;
 }
 

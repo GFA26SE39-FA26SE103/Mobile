@@ -111,7 +111,7 @@ void main() {
         final offer = openOffer(async, repo);
 
         expect(failure(async, repo.respondToOffer(offer.offerId, TaskResponse.cannotHandle)), isA<ArgumentError>());
-        final result = run(async, repo.respondToOffer(offer.offerId, TaskResponse.cannotHandle, reason: DeclineReason.onBreak));
+        final result = run(async, repo.respondToOffer(offer.offerId, TaskResponse.cannotHandle, reason: DeclineReason.unavailable));
 
         expect(result, isNull);
         expect(run(async, repo.watchOpenOffers().first), isEmpty);

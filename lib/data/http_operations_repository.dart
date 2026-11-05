@@ -266,13 +266,13 @@ class HttpOperationsRepository implements OperationsRepository {
 
   static TaskOffer _offerOf(Map json) {
     final createdAt = _time(json['createdAt']);
-    final attempt = json['attempt'] as int;
+    final attempt = (json['attempt'] ?? json['waveNumber']) as int? ?? 1;
     final closedReason = json['closedReason'] as String?;
     final status = switch (json['status']) {
-      'OFFERED' => OfferStatus.open,
+      'PENDING' || 'OFFERED' => OfferStatus.open,
       'ACCEPTED' => OfferStatus.accepted,
       'DECLINED' => OfferStatus.declined,
-      'EXPIRED' => OfferStatus.escalated,
+      'EXPIRED' => OfferStatus.expired,
       _ => switch (closedReason) {
           'TAKEN_BY_OTHER' => OfferStatus.takenByOther,
           'EVENT_CLEARED' => OfferStatus.eventCleared,
@@ -299,6 +299,8 @@ class HttpOperationsRepository implements OperationsRepository {
       status: status,
       cameraCode: json['cameraCode'] as String?,
       eventClearedAt: _timeOrNull(json['eventClearedAt']),
+      expiresAt: _timeOrNull(json['expiresAt']),
+      dispatchScope: json['dispatchScope'] as String?,
     );
   }
 
@@ -541,7 +543,7 @@ class HttpOperationsRepository implements OperationsRepository {
         'plannedStartAt': response == TaskResponse.handleLater
             ? clock().add(handleAfter ?? const Duration(minutes: 10)).toUtc().toIso8601String()
             : null,
-        'reason': reason?.label,
+        'reason': reason?.code,
       }) as Map;
       final task = result['task'] == null ? null : _taskOf(result['task'] as Map);
       if (task != null) {
@@ -554,7 +556,7 @@ class HttpOperationsRepository implements OperationsRepository {
       unawaited(_offers.refresh());
       throw switch (f.code) {
         'TASK_ALREADY_TAKEN' => _taken(f.message),
-        'OFFER_CLOSED' => const OfferNoLongerOpen(),
+        'OFFER_CLOSED' || 'OFFER_EXPIRED' => const OfferNoLongerOpen(),
         'WORKLOAD_LIMIT' => const WorkloadLimitReached(),
         _ => OperationFailed(f.message),
       };

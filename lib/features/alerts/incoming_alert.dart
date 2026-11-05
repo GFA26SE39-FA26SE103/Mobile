@@ -104,7 +104,7 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
 
   Future<void> _respond(TaskResponse response) async {
     if (response == TaskResponse.cannotHandle && _reason == null) {
-      setState(() => _error = 'Choose a reason so the Operator knows why.');
+      setState(() => _error = 'Choose a reason.');
       return;
     }
     final previous = _phase;
@@ -155,14 +155,14 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
     final taken = _taken ??
         (offer.status == OfferStatus.takenByOther ? TaskAlreadyTaken(takenBy: offer.takenBy, takenAt: offer.takenAt) : null);
     if (taken != null) return _TakenView(offer: offer, taken: taken);
-    if (offer.status == OfferStatus.escalated) return _EscalatedView(offer: offer);
+    if (offer.status == OfferStatus.expired) return _ExpiredView(offer: offer);
     if (offer.status == OfferStatus.eventCleared) return _ClearedView(offer: offer);
     if (offer.status == OfferStatus.withdrawn) return _WithdrawnView(offer: offer);
 
     final c = context.colors;
     final theme = Theme.of(context).textTheme;
     final sending = _phase == _Phase.sending;
-    final next = offer.nextAlertAt;
+    final next = offer.expiresAt ?? offer.nextAlertAt;
     final secondsLeft = next == null ? null : math.max(0, next.difference(now).inSeconds);
     // The ring spans this round as first seen, since the server sets the retry interval.
     if (secondsLeft != null && offer.attempt != _roundAttempt) {
@@ -180,7 +180,7 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
             Icon(Icons.vibration, color: c.onPrimary, size: 18),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('New task offer in your zone',
+              child: Text('New task offer',
                   style: TextStyle(color: c.onPrimary, fontWeight: FontWeight.w700, fontSize: 13, letterSpacing: 0.2)),
             ),
             Text(timeAgo(offer.createdAt, now), style: TextStyle(color: c.onPrimary, fontSize: 12.5)),
@@ -211,9 +211,14 @@ class _TaskOfferSheetState extends ConsumerState<TaskOfferSheet> {
             const SizedBox(width: 12),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Offer ${offer.attempt} of ${offer.maxAttempts}', style: const TextStyle(fontWeight: FontWeight.w600)),
                 Text(
-                  secondsLeft != null && offer.attempt < offer.maxAttempts
+                  offer.expiresAt != null ? 'Offer expires in ${secondsLeft ?? 0} s' : 'Offer ${offer.attempt} of ${offer.maxAttempts}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  offer.expiresAt != null
+                      ? 'Sent to ${offer.recipients} staff on shift. If nobody accepts, the search expands to more zones.'
+                      : secondsLeft != null && offer.attempt < offer.maxAttempts
                       ? 'Sent to ${offer.recipients} staff on shift. Offered again in $secondsLeft s if nobody accepts.'
                       : 'Last offer. If nobody accepts it soon, the Operator assigns it.',
                   style: theme.bodySmall,
@@ -389,8 +394,8 @@ class _TakenView extends StatelessWidget {
   }
 }
 
-class _EscalatedView extends StatelessWidget {
-  const _EscalatedView({required this.offer});
+class _ExpiredView extends StatelessWidget {
+  const _ExpiredView({required this.offer});
   final TaskOffer offer;
 
   @override
@@ -399,9 +404,9 @@ class _EscalatedView extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('Offer passed to the Operator', style: theme.titleLarge),
+        Text('Offer expired', style: theme.titleLarge),
         const SizedBox(height: 6),
-        Text('Nobody accepted "${offer.title}" after ${offer.maxAttempts} offers, so the Operator will assign it.',
+        Text('This offer for "${offer.title}" ended before you responded. It is no longer yours to accept.',
             style: theme.bodyMedium),
         const SizedBox(height: 18),
         FilledButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),

@@ -54,7 +54,7 @@ void main() {
 
     app.repo.simulateEventTask();
     await settle(tester);
-    expect(text('New task offer in your zone'), findsOneWidget);
+    expect(text('New task offer'), findsOneWidget);
     expect(text('WARNING · Operational event'), findsOneWidget);
     expect(text('Offer 1 of 3'), findsOneWidget);
 
@@ -92,7 +92,7 @@ void main() {
     await checkIn(tester);
     app.repo.simulateEventTask(takenByOther: true);
     await settle(tester);
-    expect(text('New task offer in your zone'), findsOneWidget);
+    expect(text('New task offer'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 5));
     await settle(tester);
@@ -115,7 +115,7 @@ void main() {
     expect(text('CRITICAL · Operational event'), findsOneWidget);
     expect(text('Raised from WARNING'), findsOneWidget);
     expect(text('11 people waiting · 6 min'), findsOneWidget);
-    expect(text('New task offer in your zone'), findsOneWidget);
+    expect(text('New task offer'), findsOneWidget);
 
     app.repo.clearLatestEvent();
     await settle(tester);
@@ -148,12 +148,12 @@ void main() {
     await settle(tester);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Send: cannot handle'));
     await settle(tester);
-    expect(text('Choose a reason so the Operator knows why.'), findsOneWidget);
+    expect(text('Choose a reason.'), findsOneWidget);
 
-    await tapVisible(tester, find.widgetWithText(ChoiceChip, DeclineReason.onBreak.label));
+    await tapVisible(tester, find.widgetWithText(ChoiceChip, DeclineReason.unavailable.label));
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Send: cannot handle'));
     await settle(tester);
-    expect(text('New task offer in your zone'), findsNothing);
+    expect(text('New task offer'), findsNothing);
     expect(await app.repo.watchOpenOffers().first, isEmpty);
   });
 
