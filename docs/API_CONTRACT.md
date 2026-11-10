@@ -46,7 +46,7 @@ Respond bodies:
 ```json
 {"response":"HANDLE_NOW","plannedStartAt":null,"reason":null}
 {"response":"HANDLE_LATER","plannedStartAt":"2026-10-25T06:30:00Z","reason":null}
-{"response":"CANNOT_HANDLE","plannedStartAt":null,"reason":"Busy with another task"}
+{"response":"CANNOT_HANDLE","plannedStartAt":null,"reason":"BUSY"}
 ```
 
 `HANDLE_NOW` → task `IN_PROGRESS`; `HANDLE_LATER` → `ACCEPTED` with a planned start that must be in
@@ -69,9 +69,13 @@ falls back to demo data.
 - Task: `ACCEPTED`, `IN_PROGRESS`, `SUBMITTED` (waiting for the Operator to verify), `VERIFIED`
   (confirmed done), `CANCELLED`. My tasks shows Accepted / In progress / Finished.
   `eventClearedAt` means the source event recovered; it is not the completion time.
-- Offer: `OFFERED` (open), `ACCEPTED`, `DECLINED`, `EXPIRED` (no acceptance; passed to the
-  Operator), `WITHDRAWN` with `closedReason` `TAKEN_BY_OTHER`, `EVENT_CLEARED` or
-  `MANUALLY_ASSIGNED`. A withdrawn offer is not assumed to be taken by someone else.
+- Offer (TaskOffer V7, Back-End `feature/after-review-backend-sync`): `PENDING` (open),
+  `ACCEPTED`, `DECLINED` (the app sends `BUSY`, `UNAVAILABLE`, `NOT_QUALIFIED` or `OTHER` as
+  `reason`, stored as `decline_reason_code`), `EXPIRED` (no response in time; not a decline),
+  `CANCELLED` with `closedReason` `TAKEN_BY_OTHER`, `EVENT_CLEARED` or `MANUALLY_ASSIGNED`. A
+  cancelled offer is not assumed to be taken by someone else. The offer view still returns
+  `attempt`, `maxAttempts` and `nextAlertAt`, which is null on the last round. It does not return
+  `expiresAt`, `waveNumber` or `dispatchScope`; the app reads them only if the backend adds them.
 - Swap: `PENDING_PEER` → `PENDING_MANAGER` → `APPROVED` / `REJECTED`, or `DECLINED_BY_PEER`,
   `CANCELLED`, `EXPIRED`. `expiresAt` comes from the server: 24 h before the earliest affected
   shift. Only the Manager's approval changes assignments.

@@ -94,7 +94,7 @@ class _OpenOfferCard extends StatelessWidget {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(offer.title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            Text([if (offer.location.isNotEmpty) offer.location, 'offer ${offer.attempt} of ${offer.maxAttempts}'].join(' · '),
+            Text([if (offer.location.isNotEmpty) offer.location, offer.roundLabel].join(' · '),
                 style: Theme.of(context).textTheme.bodySmall),
           ]),
         ),

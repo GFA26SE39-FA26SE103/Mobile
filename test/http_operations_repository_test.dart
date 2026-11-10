@@ -548,11 +548,41 @@ void main() {
 
     final last = await get('last');
     expect((last.isOpen, last.attempt, last.maxAttempts, last.nextAlertAt), (true, 3, 4, null));
-    expect((await get('expired')).status, OfferStatus.escalated);
+    expect((await get('expired')).status, OfferStatus.expired);
     expect((await get('cleared')).status, OfferStatus.eventCleared);
     // Withdrawn by the Operator is not "taken by someone else".
     expect((await get('manual')).status, OfferStatus.withdrawn);
     expect((await get('declined')).status, OfferStatus.declined);
+  });
+
+  test('reads TaskOffer V7 statuses and fields', () async {
+    final (:repo, :api) = build();
+    Map<String, Object?> o(String id, String status, {String? reason}) {
+      final json = offerJson(status: status, closedReason: reason)..['offerId'] = id;
+      json.remove('attempt');
+      return json
+        ..['waveNumber'] = 2
+        ..['dispatchScope'] = 'SAME_FLOOR'
+        ..['expiresAt'] = utc(now.add(const Duration(seconds: 45)));
+    }
+
+    api.on('GET /api/me/task-offers', (_) => [
+          o('open', 'PENDING'),
+          o('taken', 'CANCELLED', reason: 'TAKEN_BY_OTHER'),
+          o('cleared', 'CANCELLED', reason: 'EVENT_CLEARED'),
+          o('other', 'CANCELLED'),
+          o('late', 'EXPIRED'),
+        ]);
+    await repo.refresh();
+    Future<TaskOffer> get(String id) async => (await repo.watchOffer(id).first)!;
+
+    final open = await get('open');
+    expect((open.status, open.attempt, open.dispatchScope, open.roundLabel), (OfferStatus.open, 2, 'SAME_FLOOR', 'offer round 2'));
+    expect(open.expiresAt, now.add(const Duration(seconds: 45)));
+    expect((await get('taken')).status, OfferStatus.takenByOther);
+    expect((await get('cleared')).status, OfferStatus.eventCleared);
+    expect((await get('other')).status, OfferStatus.withdrawn);
+    expect((await get('late')).status, OfferStatus.expired);
   });
 
   test('Handle now and Cannot handle send exactly the documented payload', () async {
@@ -563,8 +593,8 @@ void main() {
     await repo.respondToOffer('off-1', TaskResponse.handleNow);
     expect(api.calls.last.data, {'response': 'HANDLE_NOW', 'plannedStartAt': null, 'reason': null});
 
-    expect(await repo.respondToOffer('off-1', TaskResponse.cannotHandle, reason: DeclineReason.onBreak), isNull);
-    expect(api.calls.last.data, {'response': 'CANNOT_HANDLE', 'plannedStartAt': null, 'reason': 'On break'});
+    expect(await repo.respondToOffer('off-1', TaskResponse.cannotHandle, reason: DeclineReason.unavailable), isNull);
+    expect(api.calls.last.data, {'response': 'CANNOT_HANDLE', 'plannedStartAt': null, 'reason': 'UNAVAILABLE'});
   });
 
   test('a shift the Manager cancelled is left out of My shifts', () async {

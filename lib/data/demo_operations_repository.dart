@@ -588,7 +588,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
       final current = _offer(id);
       if (current == null || !current.isOpen) return;
       if (current.attempt >= current.maxAttempts) {
-        _replaceOffer(current.copyWith(status: OfferStatus.escalated));
+        _replaceOffer(current.copyWith(status: OfferStatus.expired));
         _cancelTimers(id);
         _notify(NotificationKind.offerEscalated, 'Offer passed to Operator',
             '${current.title} · nobody accepted after ${current.maxAttempts} offers',
