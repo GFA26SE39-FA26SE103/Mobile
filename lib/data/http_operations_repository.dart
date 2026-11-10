@@ -1,9 +1,9 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 
 import '../core/api/api_exception.dart';
-import 'demo_operations_repository.dart';
 import 'models.dart';
 import 'operations_repository.dart';
 
@@ -54,8 +54,7 @@ class _Feed<T> {
 /// The API has no push channel yet (FCM is not built), so while the app is in front offers,
 /// tasks, eligibility and notifications are polled every [fastPoll], shifts and swap requests
 /// every [slowPoll]. Polling stops in the background and everything reloads on resume.
-/// StaffReport has no API yet either: [extractReport] and [submitReport] run on the in-app demo
-/// and the receipt is marked [ReportReceipt.preview].
+/// Staff reports use the real Backend API; AI suggestions remain editable until Staff confirms.
 class HttpOperationsRepository implements OperationsRepository {
   HttpOperationsRepository(
     this._dio, {
@@ -64,8 +63,7 @@ class HttpOperationsRepository implements OperationsRepository {
     bool poll = true,
     this.fastPoll = const Duration(seconds: 5),
     this.slowPoll = const Duration(seconds: 30),
-  })  : _poll = poll,
-        _reports = DemoOperationsRepository(clock: clock, staffName: staffName, autoOfferAfterCheckIn: null) {
+  })  : _poll = poll {
     _shifts = _Feed(_loadShifts);
     _eligibility = _Feed(() async => _eligibilityOf(await _get('/api/me/eligibility')));
     _offers = _Feed(() async => [for (final o in await _get('/api/me/task-offers', {'status': 'ALL'}) as List) _offerOf(o as Map)]);
@@ -87,7 +85,6 @@ class HttpOperationsRepository implements OperationsRepository {
   final DateTime Function() clock;
   final Duration fastPoll;
   final Duration slowPoll;
-  final DemoOperationsRepository _reports;
 
   late final _Feed<List<Shift>> _shifts;
   late final _Feed<Eligibility> _eligibility;
@@ -239,6 +236,7 @@ class HttpOperationsRepository implements OperationsRepository {
         end: _time(json['endsAt']),
         label: json['shiftName'] as String,
         zoneName: _zones(json['zones']),
+        zoneIds: [for (final z in (json['zones'] as List?) ?? const []) (z as Map)['zoneId'] as String],
         checkedInAt: _timeOrNull(json['checkInAt']),
         checkInOpensAt: _timeOrNull(json['checkInOpensAt']),
       );
@@ -676,24 +674,109 @@ class HttpOperationsRepository implements OperationsRepository {
   // ------------------------------------------------------------------- reports
 
   @override
-  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false}) =>
-      _reports.extractReport(note, photoPaths, fromVoice: fromVoice);
+  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false, String? voicePath}) =>
+      _extractLiveReport(note, photoPaths, fromVoice: fromVoice, voicePath: voicePath);
+
+  Future<ReportDraft> _extractLiveReport(String note, List<String> photoPaths, {bool fromVoice = false, String? voicePath}) async {
+    final typesData = await _get('/api/staff-reports/incident-types') as List;
+    final tasksData = await _get('/api/staff-reports/task-types') as List;
+    final zonesData = await _get('/api/staff-reports/zones') as List;
+    final types = [for (final raw in typesData) ReportOption(raw['code'] as String, raw['name'] as String,
+        allowedTaskCodes: (raw['allowedTaskTypeCodes'] as List? ?? []).cast<String>())];
+    final tasks = [for (final raw in tasksData) ReportOption(raw['code'] as String, raw['name'] as String,
+        routineEligible: raw['routineEligible'] == true)];
+    final zones = [for (final raw in zonesData) ReportZoneOption(raw['zoneId'] as String, raw['name'] as String, raw['floorName'] as String)];
+    Map<String, dynamic>? ai;
+    try {
+      final form = FormData.fromMap({'note': note});
+      for (final path in photoPaths) {
+        form.files.add(MapEntry('photos', await MultipartFile.fromFile(path,
+            contentType: DioMediaType('image', path.toLowerCase().endsWith('.png') ? 'png' : 'jpeg'))));
+      }
+      if (voicePath != null) {
+        form.files.add(MapEntry('voice', await MultipartFile.fromFile(voicePath,
+            contentType: DioMediaType('audio', 'mp4'))));
+      }
+      ai = ((await _call(() => _dio.post<Object?>('/api/staff-reports/draft', data: form))) as Map).cast<String, dynamic>();
+    } on _Failure {
+      // The draft can still be filled manually; never invent a classification.
+    }
+    final category = ai?['reportCategory'] as String?;
+    final kind = category == 'POTENTIAL_INCIDENT' ? ReportKind.potentialIncident : ReportKind.routineRequest;
+    final code = kind == ReportKind.potentialIncident ? (ai?['incidentTypeCode'] as String?) : null;
+    final selected = types.where((x) => x.code == code).firstOrNull;
+    final suggested = (ai?['suggestedTaskTypeCodes'] as List? ?? []).whereType<String>().toList();
+    final validIncidentTasks = selected?.allowedTaskCodes ?? const <String>[];
+    final taskCodes = kind == ReportKind.potentialIncident && selected != null
+        ? suggested.where((code) => validIncidentTasks.contains(code) && tasks.any((t) => t.code == code)).take(8).toList()
+        : const <String>[];
+    final routine = kind == ReportKind.routineRequest
+        ? tasks.where((t) => t.routineEligible && suggested.contains(t.code)).firstOrNull : null;
+    final suggestedZone = zones.where((z) => z.id == ai?['suggestedZoneId']).firstOrNull;
+    final random = Random.secure();
+    String hex(int size) => List.generate(size, (_) => random.nextInt(16).toRadixString(16)).join();
+    final id = '${hex(8)}-${hex(4)}-4${hex(3)}-${(8 + random.nextInt(4)).toRadixString(16)}${hex(3)}-${hex(12)}';
+    final transcript = ai?['transcript'] as String?;
+    final combinedNote = [note.trim(), if (transcript != null) transcript.trim()].where((s) => s.isNotEmpty).join('\n');
+    return ReportDraft(
+      note: combinedNote, photoPaths: photoPaths, kind: kind, type: (selected ?? routine)?.name ?? '',
+      location: (ai?['locationDescription'] as String?) ?? '', severity: ReportSeverity.low,
+      title: (ai?['title'] as String?) ?? '', suggestedAction: '', fromVoice: fromVoice,
+      description: (ai?['description'] as String?) ?? combinedNote,
+      aiFields: ai == null ? {} : {if (selected != null) ReportField.type, if (category != null) ReportField.kind,
+        if ((ai['title'] as String? ?? '').isNotEmpty) ReportField.title,
+        if ((ai['locationDescription'] as String? ?? '').isNotEmpty) ReportField.location},
+      live: true, typeCode: (selected ?? routine)?.code, incidentTypes: types, taskTypes: tasks, zones: zones, reportId: id,
+      taskTypeCodes: taskCodes, zoneId: suggestedZone?.id,
+      confidenceLevel: ai?['confidenceLevel'] as String?, evidence: ai?['evidence'] as String?,
+      voicePath: voicePath,
+    );
+  }
 
   @override
   Future<ReportReceipt> submitReport(ReportDraft draft) async {
-    final receipt = await _reports.submitReport(draft);
-    return ReportReceipt(
-      reportCode: receipt.reportCode,
-      outcome: receipt.outcome,
-      incidentCode: receipt.incidentCode,
-      title: receipt.title,
-      location: receipt.location,
-      zoneName: receipt.zoneName,
-      offeredTo: receipt.offeredTo,
-      submittedAt: receipt.submittedAt,
-      edited: receipt.edited,
-      preview: true,
+    if (!draft.live || draft.zoneId == null || draft.typeCode == null || draft.reportId == null) {
+      throw StateError('Select a Zone and category before submitting.');
+    }
+    if (draft.kind == ReportKind.potentialIncident && draft.duplicateDecision == null) {
+      final duplicates = await _get('/api/staff-reports/duplicates', {'zoneId': draft.zoneId, 'incidentTypeCode': draft.typeCode}) as List;
+      if (duplicates.isNotEmpty) throw const ReportOverlapRequired(incident: true);
+    }
+    if (draft.kind == ReportKind.routineRequest && draft.routineTaskDecision == null) {
+      final overlaps = await _get('/api/staff-reports/routine-overlaps', {'zoneId': draft.zoneId, 'taskTypeCode': draft.typeCode}) as List;
+      if (overlaps.isNotEmpty) throw const ReportOverlapRequired(incident: false);
+    }
+    final fields = <String, dynamic>{
+      'reportId': draft.reportId, 'zoneId': draft.zoneId, 'title': draft.title.trim(),
+      'description': draft.description.trim(), 'locationDescription': draft.location.trim(),
+      'reportCategory': draft.kind == ReportKind.potentialIncident ? 'POTENTIAL_INCIDENT' : 'ROUTINE_REQUEST',
+    };
+    if (draft.kind == ReportKind.potentialIncident) fields['incidentTypeCode'] = draft.typeCode;
+    if (draft.confirmedScenarioCode != null) fields['confirmedScenarioCode'] = draft.confirmedScenarioCode;
+    if (draft.duplicateDecision != null) fields['duplicateDecision'] = draft.duplicateDecision;
+    if (draft.routineTaskDecision != null) fields['routineTaskDecision'] = draft.routineTaskDecision;
+    final form = FormData.fromMap(fields);
+    for (final code in draft.kind == ReportKind.routineRequest ? [draft.typeCode!] : draft.taskTypeCodes) {
+      form.fields.add(MapEntry('taskTypeCodes', code));
+    }
+    for (final path in draft.photoPaths) {
+      form.files.add(MapEntry('photos', await MultipartFile.fromFile(path,
+          contentType: DioMediaType('image', path.toLowerCase().endsWith('.png') ? 'png' : 'jpeg'))));
+    }
+    if (draft.voicePath != null) {
+      form.files.add(MapEntry('voice', await MultipartFile.fromFile(draft.voicePath!,
+          contentType: DioMediaType('audio', 'mp4'))));
+    }
+    final data = (await _call(() => _dio.post<Object?>('/api/staff-reports', data: form))) as Map;
+    final incidentId = data['incidentId'] as String?;
+    final receipt = ReportReceipt(
+      reportCode: data['reportId'] as String, outcome: draft.kind == ReportKind.routineRequest ? ReportOutcome.routineTask :
+          incidentId != null ? ReportOutcome.incidentQualified : ReportOutcome.awaitingQualification,
+      incidentCode: incidentId, title: data['title'] as String, location: draft.location,
+      zoneName: draft.zones.where((z) => z.id == draft.zoneId).firstOrNull?.name ?? 'Selected Zone', offeredTo: 0,
+      submittedAt: DateTime.tryParse(data['confirmedAt'] as String? ?? '') ?? clock(), edited: draft.edited,
     );
+    return receipt;
   }
 
   void dispose() {
@@ -705,8 +788,12 @@ class HttpOperationsRepository implements OperationsRepository {
     for (final feed in [_shifts, _eligibility, _offers, _tasks, _notifications, _swaps]) {
       feed.close();
     }
-    _reports.dispose();
   }
+}
+
+class ReportOverlapRequired implements Exception {
+  const ReportOverlapRequired({required this.incident});
+  final bool incident;
 }
 
 /// A failed call inside this repository, before it is turned into a domain exception.

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supermarket_staff/data/models.dart';
 import 'package:supermarket_staff/features/auth/auth_repository.dart';
+import 'package:supermarket_staff/features/report/recorded_voice_input.dart';
 
 import 'helpers.dart';
 
@@ -16,7 +17,51 @@ Future<void> checkIn(WidgetTester tester) async {
   await settle(tester);
 }
 
+class _FakeReportRecorder implements ReportAudioRecorder {
+  int starts = 0;
+  bool failStop = false;
+
+  @override
+  Future<bool> start() async { starts++; return true; }
+  @override
+  Future<String?> stop() async {
+    if (failStop) throw StateError('microphone stopped');
+    return '.dart_tool/test-voice.m4a';
+  }
+  @override
+  Future<void> cancel() async {}
+  @override
+  Future<void> dispose() async {}
+}
+
 void main() {
+  final recorder = _FakeReportRecorder();
+  appTest('report voice recording enables review only after a successful stop', (tester, app) async {
+    await goTab(tester, 'Report');
+    final aiButton = find.widgetWithText(FilledButton, 'Let AI fill the report');
+    expect(tester.widget<FilledButton>(aiButton).onPressed, isNull);
+    await tester.tap(text('Record note'));
+    await settle(tester);
+    expect(recorder.starts, 1);
+    expect(text('Stop recording'), findsOneWidget);
+    expect(tester.widget<FilledButton>(aiButton).onPressed, isNull);
+    await tester.tap(text('Stop recording'));
+    await settle(tester);
+    expect(text('Record again'), findsOneWidget);
+    expect(tester.widget<FilledButton>(aiButton).onPressed, isNotNull);
+  }, audioRecorder: recorder);
+
+  final failingRecorder = _FakeReportRecorder()..failStop = true;
+  appTest('failed voice stop keeps the report unready and shows an error', (tester, app) async {
+    await goTab(tester, 'Report');
+    await tester.tap(text('Record note'));
+    await settle(tester);
+    await tester.tap(text('Stop recording'));
+    await settle(tester);
+    expect(text('Could not record the voice note. Try again or type the report.'), findsOneWidget);
+    await tester.scrollUntilVisible(text('Let AI fill the report'), 150, scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Let AI fill the report')).onPressed, isNull);
+  }, audioRecorder: failingRecorder);
   appTest('sign-in validates input, then lands a staff member on My tasks', signedIn: false, (tester, app) async {
     expect(text('Welcome back'), findsOneWidget);
 

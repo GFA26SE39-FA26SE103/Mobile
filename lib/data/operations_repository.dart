@@ -84,7 +84,7 @@ abstract class OperationsRepository {
   Future<void> markAllRead();
 
   // StaffReport (Report → AI extract → Confirm → stored; routine Task or Incident qualification)
-  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false});
+  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false, String? voicePath});
   Future<ReportReceipt> submitReport(ReportDraft draft);
 }
 

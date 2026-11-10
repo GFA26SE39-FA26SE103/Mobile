@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,10 +8,12 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../data/models.dart';
+import '../../data/http_operations_repository.dart' show ReportOverlapRequired;
 import '../../data/providers.dart';
 import '../../shared/format.dart';
 import '../../shared/widgets.dart';
 import 'voice_input.dart';
+import 'recorded_voice_input.dart';
 
 /// The draft being confirmed; lives outside the routes so it survives navigation.
 final reportDraftProvider = StateProvider<ReportDraft?>((ref) => null);
@@ -38,6 +41,10 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
   bool _extracting = false;
   bool _listening = false;
   bool _usedVoice = false;
+  bool _recording = false;
+  bool _recordingBusy = false;
+  String? _voicePath;
+  Timer? _recordingLimit;
   String _beforeVoice = '';
   String? _error;
 
@@ -49,12 +56,43 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
 
   @override
   void dispose() {
+    _recordingLimit?.cancel();
+    if (_recording) unawaited(ref.read(reportAudioRecorderProvider).cancel());
     if (_listening) ref.read(voiceInputProvider).stop();
     _note.dispose();
     super.dispose();
   }
 
-  bool get _ready => _note.text.trim().length >= 5 || _photos.isNotEmpty;
+  bool get _ready => _note.text.trim().length >= 5 || _photos.isNotEmpty || _voicePath != null;
+
+  Future<void> _toggleRecording() async {
+    if (_recordingBusy) return;
+    setState(() => _recordingBusy = true);
+    final recorder = ref.read(reportAudioRecorderProvider);
+    try {
+      if (_recording) {
+        _recordingLimit?.cancel();
+        final path = await recorder.stop();
+        if (mounted) setState(() { _recording = false; _voicePath = path; _usedVoice = path != null; });
+        return;
+      }
+      if (_listening) {
+        await ref.read(voiceInputProvider).stop();
+        if (mounted) setState(() => _listening = false);
+      }
+      final previous = _voicePath;
+      final started = await recorder.start();
+      if (!mounted) { if (started) await recorder.cancel(); return; }
+      if (!started) { setState(() => _error = 'Allow microphone access to record a voice note.'); return; }
+      if (previous != null) unawaited(File(previous).delete().catchError((Object _) => File(previous)));
+      setState(() { _recording = true; _voicePath = null; _error = null; });
+      _recordingLimit = Timer(const Duration(seconds: 60), () { if (mounted && _recording) _toggleRecording(); });
+    } catch (_) {
+      if (mounted) setState(() { _recording = false; _error = 'Could not record the voice note. Try again or type the report.'; });
+    } finally {
+      if (mounted) setState(() => _recordingBusy = false);
+    }
+  }
 
   Future<void> _addPhoto(ImageSource source) async {
     try {
@@ -66,6 +104,11 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
   }
 
   Future<void> _toggleVoice() async {
+    if (_recordingBusy) return;
+    if (_recording) {
+      await _toggleRecording();
+      if (_recording || _voicePath == null) return;
+    }
     final voice = ref.read(voiceInputProvider);
     if (_listening) {
       await voice.stop();
@@ -101,16 +144,22 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
 
   Future<void> _extract() async {
     if (_listening) await _toggleVoice();
+    if (_recordingBusy) return;
+    if (_recording) {
+      await _toggleRecording();
+      if (_voicePath == null) return;
+    }
     setState(() {
       _extracting = true;
       _error = null;
     });
     try {
-      final draft = await ref.read(operationsRepositoryProvider).extractReport(_note.text, List.of(_photos), fromVoice: _usedVoice);
+      final draft = (await ref.read(operationsRepositoryProvider).extractReport(_note.text, List.of(_photos), fromVoice: _usedVoice, voicePath: _voicePath))
+          .defaultZoneFromShift(ref.read(todayShiftProvider));
       ref.read(reportDraftProvider.notifier).state = draft;
       if (mounted) context.go('/report/review');
     } catch (_) {
-      if (mounted) setState(() => _error = 'AI could not read the report. Try again, or fill it in yourself on the next screen.');
+      if (mounted) setState(() => _error = 'Could not load the report catalog. Check your connection and try again.');
     } finally {
       if (mounted) setState(() => _extracting = false);
     }
@@ -127,6 +176,7 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
       if (next != null && next != previous) {
         _note.clear();
         _usedVoice = false;
+        _voicePath = null;
         setState(_photos.clear);
       }
     });
@@ -135,7 +185,7 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 18, 16, 16), children: [
         Text('What happened?', style: theme.titleLarge),
         const SizedBox(height: 4),
-        Text('Type, speak or add a photo. AI fills in the report and you check it before anything is sent.', style: theme.bodySmall),
+        Text('Type, speak or add a photo. Draft input goes to AI; you review the suggestion before submitting a report.', style: theme.bodySmall),
         const SizedBox(height: 14),
         TextField(
           controller: _note,
@@ -153,6 +203,9 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
             active: _listening,
             onTap: _toggleVoice,
           ),
+          _AddTile(icon: _recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record,
+            label: _recording ? 'Stop recording' : _voicePath == null ? 'Record note' : 'Record again',
+            active: _recording, onTap: _toggleRecording),
           for (var i = 0; i < _photos.length; i++) _PhotoThumb(path: _photos[i], onRemove: () => setState(() => _photos.removeAt(i))),
           if (_photos.length < _maxPhotos) ...[
             _AddTile(icon: Icons.photo_camera_outlined, label: 'Take photo', onTap: () => _addPhoto(ImageSource.camera)),
@@ -185,7 +238,8 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
         Row(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(Icons.lock_outline, size: 14, color: c.textDim),
           const SizedBox(width: 4),
-          Flexible(child: Text('Nothing is sent until you confirm', style: theme.bodySmall?.copyWith(color: c.textDim))),
+          Flexible(child: Text('No Incident or Task is created until you confirm. Draft input is sent for AI analysis.',
+              style: theme.bodySmall?.copyWith(color: c.textDim))),
         ]),
       ]),
     );
@@ -289,7 +343,12 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
       useSafeArea: true,
       isScrollControlled: true,
       builder: (context) => ListView(shrinkWrap: true, padding: const EdgeInsets.only(bottom: 16), children: [
-        for (final kind in ReportKind.values) ...[
+        if (draft.live)
+          for (final option in draft.kind == ReportKind.potentialIncident
+              ? draft.incidentTypes : draft.taskTypes.where((x) => x.routineEligible))
+            ListTile(title: Text(option.name), subtitle: Text(option.code),
+              onTap: () => Navigator.of(context).pop(option.name)),
+        if (!draft.live) for (final kind in ReportKind.values) ...[
           Padding(padding: const EdgeInsets.fromLTRB(20, 8, 20, 4), child: GroupLabel(kind.label)),
           for (final cat in reportCategories.where((c) => c.kind == kind))
             ListTile(
@@ -301,6 +360,58 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
       ]),
     );
     if (value != null && value != draft.type) _update(draft.edit(ReportField.type, text: value));
+  }
+
+  Future<void> _pickZone(ReportDraft draft) async {
+    final zoneId = await showModalBottomSheet<String>(
+      context: context, useSafeArea: true, isScrollControlled: true,
+      builder: (context) => ListView(shrinkWrap: true, children: [
+        for (final zone in draft.zones)
+          ListTile(title: Text(zone.name), subtitle: Text(zone.floorName),
+            onTap: () => Navigator.of(context).pop(zone.id)),
+      ]),
+    );
+    if (zoneId != null) _update(draft.withSelection(zoneId: zoneId));
+  }
+
+  Future<void> _editDescription(ReportDraft draft) async {
+    final value = await showModalBottomSheet<String>(context: context, isScrollControlled: true, useSafeArea: true,
+      builder: (_) => _EditTextSheet(label: 'Report description', initial: draft.description, maxLines: 4));
+    if (value != null) _update(draft.withSelection(description: value));
+  }
+
+  Future<void> _pickTasks(ReportDraft draft) async {
+    final allowed = draft.incidentTypes.where((x) => x.code == draft.typeCode).firstOrNull?.allowedTaskCodes ?? [];
+    final choices = draft.taskTypes.where((x) => allowed.contains(x.code)).toList();
+    final selected = draft.taskTypeCodes.toSet();
+    final result = await showModalBottomSheet<List<String>>(
+      context: context, useSafeArea: true, isScrollControlled: true,
+      builder: (context) => StatefulBuilder(builder: (context, setSheetState) => ListView(shrinkWrap: true, children: [
+        const ListTile(title: Text('Select corrective tasks')),
+        for (final option in choices)
+          CheckboxListTile(title: Text(option.name), subtitle: Text(option.code),
+            value: selected.contains(option.code),
+            onChanged: (checked) => setSheetState(() { if (checked == true) { selected.add(option.code); } else { selected.remove(option.code); } })),
+        Padding(padding: const EdgeInsets.all(16), child: FilledButton(
+          onPressed: () => Navigator.of(context).pop(selected.toList()), child: const Text('Done'))),
+      ])),
+    );
+    if (result != null) _update(draft.withSelection(taskTypeCodes: result));
+  }
+
+  Future<void> _confirmScenario(ReportDraft draft) async {
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Confirm exposed electrical wire'),
+      content: const Text('Only select this if you personally confirmed an exposed electrical wire. This requires both isolation (TT-12) and electrical resolution (TT-13). AI cannot confirm it for you.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Not confirmed')),
+        FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('I confirmed it'))],
+    ));
+    if (confirmed == true) {
+      _update(draft.withSelection(confirmedScenarioCode: 'EXPOSED_ELECTRICAL_WIRE', taskTypeCodes: ['TT-12', 'TT-13']));
+    }
+    if (confirmed == false && draft.confirmedScenarioCode != null) {
+      _update(draft.withSelection(clearScenario: true));
+    }
   }
 
   Future<void> _send(ReportDraft draft) async {
@@ -315,9 +426,29 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
     });
     try {
       final receipt = await ref.read(operationsRepositoryProvider).submitReport(draft);
+      if (draft.voicePath != null) {
+        unawaited(File(draft.voicePath!).delete().catchError((Object _) => File(draft.voicePath!)));
+      }
       ref.read(reportReceiptProvider.notifier).state = receipt;
       ref.read(reportDraftProvider.notifier).state = null;
       if (mounted) context.go('/report/submitted');
+    } on ReportOverlapRequired catch (overlap) {
+      if (!mounted) return;
+      final decision = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+        title: Text(overlap.incident ? 'Similar open Incident' : 'Similar active Task'),
+        content: Text(overlap.incident
+            ? 'An open Incident of this type exists in the selected Zone. Is this the same Incident or a different one?'
+            : 'An active Task of this type exists in the selected Zone. Is your request already covered or a separate Task?'),
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop(overlap.incident ? 'ALREADY_REPORTED' : 'ALREADY_COVERED'),
+              child: Text(overlap.incident ? 'Same Incident' : 'Already covered')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(overlap.incident ? 'DIFFERENT_INCIDENT' : 'SEPARATE_TASK'),
+              child: Text(overlap.incident ? 'Different Incident' : 'Separate Task'))],
+      ));
+      if (decision != null) {
+        _update(overlap.incident ? draft.withSelection(duplicateDecision: decision)
+            : draft.withSelection(routineTaskDecision: decision));
+      }
     } catch (_) {
       if (mounted) setState(() => _error = 'The report was not sent. Check your connection and try again; your edits are kept.');
     } finally {
@@ -355,14 +486,14 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
             tone: BannerTone.brand,
             icon: Icons.auto_awesome,
             title: 'AI filled ${draft.aiFields.length} field${draft.aiFields.length == 1 ? '' : 's'}',
-            body: 'From your ${source.join(' and ')}. Tap any field to change it.',
+            body: 'From your ${source.join(' and ')}. ${draft.confidenceLevel == null ? '' : 'Model confidence: ${draft.confidenceLevel} (not calibrated). '}${draft.evidence == null ? '' : 'Basis: ${draft.evidence}. '}Review every field before sending.',
           )
         else
           const InfoBanner(
             tone: BannerTone.warning,
             icon: Icons.edit_outlined,
             title: 'Fill in the report',
-            body: 'AI could not read enough from a photo alone. Add a title and location.',
+            body: 'AI suggestion is unavailable or incomplete. Select the Zone, category and tasks yourself.',
           ),
         GroupLabel('Report as', trailing: draft.aiFields.contains(ReportField.kind) ? Pill(label: 'AI', fg: c.primary, bg: c.primaryTint) : null),
         Row(children: [
@@ -382,15 +513,35 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(children: [
             _Field(label: 'Category', value: draft.type, ai: draft.aiFields.contains(ReportField.type), onTap: () => _pickType(draft)),
+            if (draft.live) ...[
+              Divider(height: 1, color: c.border),
+              _Field(label: 'Description', value: draft.description, ai: false,
+                onTap: () => _editDescription(draft)),
+              Divider(height: 1, color: c.border),
+              _Field(label: 'Zone', value: draft.zones.where((z) => z.id == draft.zoneId).firstOrNull?.name ?? 'Select Zone',
+                ai: false, onTap: () => _pickZone(draft)),
+              if (draft.kind == ReportKind.potentialIncident) ...[
+                Divider(height: 1, color: c.border),
+                _Field(label: 'Corrective tasks', value: draft.taskTypeCodes.isEmpty ? 'Select tasks' : draft.taskTypeCodes.join(', '),
+                  ai: false, onTap: () => _pickTasks(draft)),
+                if (draft.typeCode == 'SAFETY_HAZARD') ...[
+                  Divider(height: 1, color: c.border),
+                  _Field(label: 'Exposed electrical wire',
+                    value: draft.confirmedScenarioCode == null ? 'Not confirmed' : 'Staff confirmed — TT-12 + TT-13',
+                    ai: false, onTap: () => _confirmScenario(draft)),
+                ],
+              ],
+            ],
             Divider(height: 1, color: c.border),
             _Field(
-              label: 'Location',
+              label: draft.live ? 'Location detail (optional)' : 'Location',
               value: draft.location,
               ai: draft.aiFields.contains(ReportField.location),
+              required: !draft.live,
               onTap: () => _editText(draft, ReportField.location, 'Where is it?', draft.location),
             ),
             Divider(height: 1, color: c.border),
-            Padding(
+            if (!draft.live) Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 _FieldLabel('Severity', ai: draft.aiFields.contains(ReportField.severity)),
@@ -414,15 +565,15 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
                 ),
               ]),
             ),
-            Divider(height: 1, color: c.border),
+            if (!draft.live) Divider(height: 1, color: c.border),
             _Field(
               label: 'Title',
               value: draft.title,
               ai: draft.aiFields.contains(ReportField.title),
               onTap: () => _editText(draft, ReportField.title, 'Short title', draft.title),
             ),
-            Divider(height: 1, color: c.border),
-            _Field(
+            if (!draft.live) Divider(height: 1, color: c.border),
+            if (!draft.live) _Field(
               label: 'Suggested action',
               value: draft.suggestedAction,
               ai: draft.aiFields.contains(ReportField.suggestedAction),
@@ -435,7 +586,10 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
           Text(draft.note, style: theme.bodyMedium?.copyWith(color: c.textMuted)),
         ],
         const SizedBox(height: 14),
-        FactLine(
+        if (draft.live)
+          const FactLine(icon: Icons.fact_check_outlined,
+            text: 'AI suggestions are not a decision. Check the Zone, category and corrective tasks before sending.')
+        else FactLine(
           icon: draft.kind == ReportKind.routineRequest ? Icons.groups_outlined : Icons.health_and_safety_outlined,
           text: draft.kind == ReportKind.routineRequest
               ? 'A task is offered to staff on shift in $zone. No incident is opened.'
@@ -551,11 +705,12 @@ class _FieldLabel extends StatelessWidget {
 }
 
 class _Field extends StatelessWidget {
-  const _Field({required this.label, required this.value, required this.ai, required this.onTap});
+  const _Field({required this.label, required this.value, required this.ai, required this.onTap, this.required = true});
   final String label;
   final String value;
   final bool ai;
   final VoidCallback onTap;
+  final bool required;
 
   @override
   Widget build(BuildContext context) {
@@ -571,7 +726,7 @@ class _Field extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 value.isEmpty ? 'Tap to add' : value,
-                style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600, color: value.isEmpty ? c.danger : c.text),
+                style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600, color: value.isEmpty ? (required ? c.danger : c.textMuted) : c.text),
               ),
             ]),
           ),
@@ -596,17 +751,20 @@ class ReportSubmittedScreen extends ConsumerWidget {
     final (headline, detail, chip) = switch (receipt.outcome) {
       ReportOutcome.routineTask => (
           'Request sent',
-          'A task was offered to ${receipt.offeredTo} staff on shift in ${receipt.zoneName}.',
+          receipt.preview ? 'A task was offered to ${receipt.offeredTo} staff on shift in ${receipt.zoneName}.'
+              : 'Your request was recorded for ${receipt.zoneName}. Check Tasks for its dispatch status.',
           'ROUTINE REQUEST',
         ),
       ReportOutcome.incidentQualified => (
           'Incident ${receipt.incidentCode} opened',
-          'A corrective task was offered to ${receipt.offeredTo} staff in ${receipt.zoneName}. No Operator review is needed first.',
+          receipt.preview ? 'A corrective task was offered to ${receipt.offeredTo} staff in ${receipt.zoneName}. No Operator review is needed first.'
+              : 'The Incident was opened in ${receipt.zoneName}. Check Tasks for its dispatch status.',
           'INCIDENT',
         ),
       ReportOutcome.awaitingQualification => (
           'Report recorded',
-          'It did not meet the incident rules on its own. The Operator can still open an incident or create a task.',
+          receipt.preview ? 'It did not meet the incident rules on its own. The Operator can still open an incident or create a task.'
+              : 'Your report was recorded. An Operator can review it if further action is needed.',
           'POTENTIAL INCIDENT',
         ),
     };

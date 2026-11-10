@@ -8,6 +8,7 @@ import 'package:supermarket_staff/data/demo_operations_repository.dart';
 import 'package:supermarket_staff/data/providers.dart';
 import 'package:supermarket_staff/features/auth/auth_models.dart';
 import 'package:supermarket_staff/features/auth/auth_repository.dart';
+import 'package:supermarket_staff/features/report/recorded_voice_input.dart';
 
 /// Session storage without the platform keystore.
 class MemorySessionStore extends SessionStore {
@@ -47,10 +48,12 @@ DemoOperationsRepository fastDemoRepo() => DemoOperationsRepository(
 Future<({ProviderContainer container, DemoOperationsRepository repo, MemorySessionStore store})> pumpApp(
   WidgetTester tester, {
   bool signedIn = true,
+  ReportAudioRecorder? audioRecorder,
 }) async {
   final store = MemorySessionStore(signedIn ? sessionFor(staffUser) : null);
   final repo = fastDemoRepo();
   final container = ProviderContainer(overrides: [
+    if (audioRecorder != null) reportAudioRecorderProvider.overrideWithValue(audioRecorder),
     sessionStoreProvider.overrideWithValue(store),
     authRepositoryProvider.overrideWithValue(MockAuthRepository()),
     deviceNotifierProvider.overrideWithValue(NoopDeviceNotifier()),
@@ -77,13 +80,14 @@ typedef App = ({ProviderContainer container, DemoOperationsRepository repo, Memo
 
 /// A widget test over the whole app that disposes the app (and its timers) before
 /// the framework checks for pending timers.
-void appTest(String description, Future<void> Function(WidgetTester tester, App app) body, {bool signedIn = true}) {
+void appTest(String description, Future<void> Function(WidgetTester tester, App app) body,
+    {bool signedIn = true, ReportAudioRecorder? audioRecorder}) {
   testWidgets(description, (tester) async {
     // A common Android phone viewport (logical 390×844).
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
-    final app = await pumpApp(tester, signedIn: signedIn);
+    final app = await pumpApp(tester, signedIn: signedIn, audioRecorder: audioRecorder);
     try {
       await body(tester, app);
     } finally {

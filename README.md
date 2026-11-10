@@ -14,9 +14,10 @@ qualified Incident, plus confirmed StaffReports):
 - My tasks (Accepted / In progress / Finished) with task origin (event, incident, staff report,
   Operator) and **Start now** for deferred tasks; Finished separates *Waiting for verification*
   (SUBMITTED), *Verified* and *Cancelled*
-- Report an issue by text, **voice** (on-device speech-to-text, no audio stored) or photo → AI
-  draft → confirm as a **routine request** (becomes a Task) or a **potential incident** (goes
-  through Incident qualification)
+- Report an issue by text, photo, on-device dictation, or recorded **voice note** → Backend AI
+  suggestion → Staff review → confirm as a **routine request** (Task) or a **potential incident**
+  (Incident with Staff-confirmed corrective Tasks). Recorded audio is sent to Backend for transcription
+  and stored with the confirmed report; AI drafts are not saved server-side.
 - Notifications, light and dark theme from the shared Figma "Theme" tokens
 
 Evidence capture, verification and rework (MF-03) are not in this increment.
@@ -28,7 +29,7 @@ Evidence capture, verification and rework (MF-03) are not in this increment.
 | Sign-in | Backend API. `--dart-define=MOCK_AUTH=true` signs in offline (password `staff123`). |
 | Shifts, check-in, swaps, task offers, tasks, notifications | **Backend API** (`lib/data/http_operations_repository.dart`, routes in the Back-End `docs/API.md`, MF-02 and MF-04). There is no push channel yet (FCM is not built), so while the app is in front offers, tasks, eligibility and notifications are polled every 5 s, shifts and swaps every 30 s; polling stops in the background and everything reloads on resume. Pull to refresh on My shifts and Swap requests. |
 | Phone notifications | **Local notifications** (`flutter_local_notifications`, `lib/core/device_notifications.dart`): channel *Task offers* (heads-up, re-alerts on each re-offer and on CRITICAL, removed when the offer closes), *Task updates* and *Shifts and swaps*. Tapping one opens its screen. They are shown only for changes the app learns about after it leaves the front; since polling stops in the background, the shade stays quiet until FCM push exists on the backend. Android 13+ asks for the permission on first sign-in. |
-| Staff reports | **In-app only.** The backend has no StaffReport API yet: the AI draft runs in the app and the receipt says *Preview only: not sent*. |
+| Staff reports | Backend `GET /api/staff-reports/*` catalogs and `POST /api/staff-reports/draft` for opt-in AI suggestions; `POST /api/staff-reports` saves the Staff-confirmed report and optional photos/voice note. If AI is unavailable, Staff can fill the review manually. Drafts live only in the current app session, not on the server. |
 | Everything above, offline | `--dart-define=DEMO_OPS=true` (or `MOCK_AUTH=true`) runs the **in-app demo backend** (`lib/data/demo_operations_repository.dart`). |
 
 The demo backend follows the 40 BRs in Report 3 and the 10/10/2026 PROJECT_CONTEXT

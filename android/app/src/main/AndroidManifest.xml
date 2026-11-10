@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- Voice reports: on-device speech-to-text only; no audio is stored. -->
+    <!-- Voice reports: dictation and optional recorded notes for Backend transcription/storage. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
         android:label="Supermarket Staff"

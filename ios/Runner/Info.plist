@@ -7,9 +7,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Speak your issue report instead of typing it.</string>
+	<string>Dictate or record a voice note for your issue report.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Turn your spoken report into text. Audio is not saved.</string>
+	<string>Turn your spoken report into text for review.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo of the issue you are reporting.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

@@ -895,7 +895,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
   static bool _any(String text, List<String> words) => words.any(text.contains);
 
   @override
-  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false}) async {
+  Future<ReportDraft> extractReport(String note, List<String> photoPaths, {bool fromVoice = false, String? voicePath}) async {
     await _wait(extractLatency);
     final text = note.toLowerCase();
     // Only a checked-in shift says where the staff member is; otherwise they type the location.

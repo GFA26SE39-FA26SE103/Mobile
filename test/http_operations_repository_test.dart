@@ -17,6 +17,7 @@ class FakeApi implements HttpClientAdapter {
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     calls.add(options);
+    if (requestStream != null) await requestStream.drain<void>();
     final answer = routes['${options.method} ${options.path}'];
     final headers = {
       Headers.contentTypeHeader: ['application/json'],
@@ -196,6 +197,135 @@ Map<String, Object?> swapJson({String status = 'PENDING_PEER', String viewerRole
 }
 
 void main() {
+  test('real report draft uses catalog, requires staff selections, and submits to backend', () async {
+    final (:repo, :api) = build();
+    api.on('GET /api/staff-reports/incident-types', (_) => [
+      {'code': 'SPILL_BROKEN_EQUIPMENT', 'name': 'Spill', 'allowedTaskTypeCodes': ['TT-06']}
+    ]);
+    api.on('GET /api/staff-reports/task-types', (_) => [
+      {'code': 'TT-06', 'name': 'Clean spill', 'routineEligible': false}
+    ]);
+    api.on('GET /api/staff-reports/zones', (_) => [
+      {'zoneId': 'z-b', 'name': 'Zone B', 'floorName': 'Floor 1'}
+    ]);
+    api.on('POST /api/staff-reports/draft', (_) => {
+      'title': 'Wet floor', 'locationDescription': 'Aisle 2',
+      'reportCategory': 'POTENTIAL_INCIDENT', 'incidentTypeCode': 'SPILL_BROKEN_EQUIPMENT',
+      'needsReview': true, 'suggestedTaskTypeCodes': ['TT-06'], 'suggestedZoneId': 'z-b',
+      'confidenceLevel': 'MEDIUM', 'evidence': 'Zone B mentioned in note',
+    });
+    api.on('GET /api/staff-reports/duplicates', (_) => []);
+    api.on('POST /api/staff-reports', (_) => {
+      'reportId': '00000000-0000-4000-8000-000000000001', 'title': 'Wet floor',
+      'incidentId': '00000000-0000-4000-8000-000000000002', 'confirmedAt': utc(now),
+    });
+
+    var draft = await repo.extractReport('wet floor in Zone B', []);
+    expect(draft.live, isTrue);
+    expect(draft.typeCode, 'SPILL_BROKEN_EQUIPMENT');
+    expect(draft.zoneId, 'z-b');
+    expect(draft.taskTypeCodes, ['TT-06']);
+    expect(draft.confidenceLevel, 'MEDIUM');
+    expect(draft.evidence, 'Zone B mentioned in note');
+    expect(draft.validate(), isNull);
+    final receipt = await repo.submitReport(draft);
+    expect(receipt.preview, isFalse);
+    expect(receipt.outcome, ReportOutcome.incidentQualified);
+    expect(api.calls.any((r) => r.path == '/api/staff-reports'), isTrue);
+  });
+
+  test('AI outage keeps a manual draft, never an invented IncidentType', () async {
+    final (:repo, :api) = build();
+    api.on('GET /api/staff-reports/incident-types', (_) => []);
+    api.on('GET /api/staff-reports/task-types', (_) => []);
+    api.on('GET /api/staff-reports/zones', (_) => []);
+    api.on('POST /api/staff-reports/draft', (_) => const Problem(503, 'REPORT_AI_UNAVAILABLE', 'Unavailable'));
+    final draft = await repo.extractReport('wet floor', []);
+    expect(draft.live, isTrue);
+    expect(draft.aiFields, isEmpty);
+    expect(draft.typeCode, isNull);
+  });
+
+  test('recorded audio reaches draft and final report; transcript is reviewable', () async {
+    final (:repo, :api) = build();
+    final directory = await Directory('.dart_tool').createTemp('report-voice-test');
+    addTearDown(() => directory.delete(recursive: true));
+    final voice = File('${directory.path}/note.m4a')..writeAsBytesSync([0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70]);
+    api.on('GET /api/staff-reports/incident-types', (_) => []);
+    api.on('GET /api/staff-reports/task-types', (_) => [
+      {'code': 'TT-11', 'name': 'Clean area', 'routineEligible': true}
+    ]);
+    api.on('GET /api/staff-reports/zones', (_) => [
+      {'zoneId': 'z-b', 'name': 'Zone B', 'floorName': 'Floor 1'}
+    ]);
+    api.on('POST /api/staff-reports/draft', (request) {
+      final form = request.data as FormData;
+      expect(form.files.single.key, 'voice');
+      expect(form.files.single.value.contentType.toString(), 'audio/mp4');
+      return {
+        'title': 'Clean aisle', 'description': 'Clean aisle', 'reportCategory': 'ROUTINE_REQUEST',
+        'suggestedTaskTypeCodes': ['TT-11'], 'transcript': 'Please clean aisle four.', 'needsReview': true,
+      };
+    });
+    api.on('GET /api/staff-reports/routine-overlaps', (_) => []);
+    api.on('POST /api/staff-reports', (request) {
+      final form = request.data as FormData;
+      expect(form.files.single.key, 'voice');
+      expect(form.fields.singleWhere((entry) => entry.key == 'description').value, 'Clean aisle');
+      return {
+        'reportId': '00000000-0000-4000-8000-000000000001', 'title': 'Clean aisle', 'confirmedAt': utc(now),
+      };
+    });
+    final draft = await repo.extractReport('', [], fromVoice: true, voicePath: voice.path);
+    expect(draft.note, 'Please clean aisle four.');
+    expect(draft.voicePath, voice.path);
+    expect(draft.typeCode, 'TT-11');
+    expect(draft.withSelection(zoneId: 'z-b').validate(), isNull);
+    await repo.submitReport(draft.withSelection(zoneId: 'z-b'));
+  });
+
+  test('checked-in single Zone defaults without marking Staff edit; ambiguous zones do not', () {
+    const draft = ReportDraft(note: 'wet floor', photoPaths: [], kind: ReportKind.potentialIncident,
+      type: '', location: '', severity: ReportSeverity.low, title: '', suggestedAction: '', aiFields: {},
+      live: true, zones: [ReportZoneOption('z-b', 'Zone B', 'Floor 1')]);
+    final checkedIn = Shift(shiftId: 'shift', start: now, end: now.add(const Duration(hours: 8)),
+      label: 'Morning', zoneName: 'Zone B', zoneIds: const ['z-b'], checkedInAt: now);
+    final result = draft.defaultZoneFromShift(checkedIn);
+    expect(result.zoneId, 'z-b');
+    expect(result.edited, isFalse);
+    final ambiguous = Shift(shiftId: 'shift', start: now, end: now.add(const Duration(hours: 8)),
+      label: 'Morning', zoneName: 'Multiple', zoneIds: const ['z-b', 'z-c'], checkedInAt: now);
+    expect(draft.defaultZoneFromShift(ambiguous).zoneId, isNull);
+  });
+
+  test('similar Incident requires explicit Staff decision before POST', () async {
+    final (:repo, :api) = build();
+    api.on('GET /api/staff-reports/incident-types', (_) => [
+      {'code': 'SAFETY_HAZARD', 'name': 'Safety hazard', 'allowedTaskTypeCodes': ['TT-12']}
+    ]);
+    api.on('GET /api/staff-reports/task-types', (_) => [
+      {'code': 'TT-12', 'name': 'Isolate area', 'routineEligible': false}
+    ]);
+    api.on('GET /api/staff-reports/zones', (_) => [
+      {'zoneId': 'z-b', 'name': 'Zone B', 'floorName': 'Floor 1'}
+    ]);
+    api.on('POST /api/staff-reports/draft', (_) => {
+      'title': 'Exposed wire', 'reportCategory': 'POTENTIAL_INCIDENT', 'incidentTypeCode': 'SAFETY_HAZARD',
+    });
+    api.on('GET /api/staff-reports/duplicates', (_) => [{'incidentId': 'inc-1', 'taskIds': []}]);
+    final draft = (await repo.extractReport('exposed wire', [])).withSelection(zoneId: 'z-b', taskTypeCodes: ['TT-12']);
+    await expectLater(repo.submitReport(draft), throwsA(isA<ReportOverlapRequired>()));
+    expect(api.calls.where((r) => r.path == '/api/staff-reports'), isEmpty);
+  });
+
+  test('confirmed electrical-wire report requires both mandatory task types', () {
+    final draft = ReportDraft(note: 'wire', photoPaths: const [], kind: ReportKind.potentialIncident,
+      type: 'Safety hazard', location: '', severity: ReportSeverity.low, title: 'Exposed wire',
+      suggestedAction: '', aiFields: const {}, live: true, typeCode: 'SAFETY_HAZARD',
+      zoneId: 'z-b', taskTypeCodes: const ['TT-12'], confirmedScenarioCode: 'EXPOSED_ELECTRICAL_WIRE');
+    expect(draft.validate(), 'Exposed electrical wire requires TT-12 and TT-13.');
+    expect(draft.withSelection(taskTypeCodes: ['TT-12', 'TT-13']).validate(), isNull);
+  });
   test('maps shifts, eligibility, tasks and notifications from the API', () async {
     final (:repo, :api) = build();
     await repo.refresh();
@@ -204,6 +334,7 @@ void main() {
     expect(shift.shiftId, 'sa-1');
     expect(shift.label, 'Evening');
     expect(shift.zoneName, 'Zone B');
+    expect(shift.zoneIds, ['z-b']);
     expect(shift.start, now.add(const Duration(days: 3)));
     expect(shift.isCheckedIn, isFalse);
     expect(shift.placeDetail, isEmpty);

@@ -31,6 +31,7 @@ class Shift {
     required this.label,
     required this.zoneName,
     this.zoneDetail = '',
+    this.zoneIds = const [],
     this.floorName = '',
     this.storeName = '',
     this.teammates = const [],
@@ -48,6 +49,7 @@ class Shift {
 
   /// Details the API does not return yet (counters, floor, store, teammates) are empty there.
   final String zoneDetail;
+  final List<String> zoneIds;
   final String floorName;
   final String storeName;
   final List<String> teammates;
@@ -75,6 +77,7 @@ class Shift {
         label: label,
         zoneName: zoneName,
         zoneDetail: zoneDetail,
+        zoneIds: zoneIds,
         floorName: floorName,
         storeName: storeName,
         teammates: teammates,
@@ -405,6 +408,21 @@ enum ReportSeverity {
 
 enum ReportField { kind, type, location, severity, title, suggestedAction }
 
+class ReportOption {
+  const ReportOption(this.code, this.name, {this.allowedTaskCodes = const [], this.routineEligible = false});
+  final String code;
+  final String name;
+  final List<String> allowedTaskCodes;
+  final bool routineEligible;
+}
+
+class ReportZoneOption {
+  const ReportZoneOption(this.id, this.name, this.floorName);
+  final String id;
+  final String name;
+  final String floorName;
+}
+
 /// The report as extracted by AI and then confirmed or corrected by the staff member (BR-17).
 class ReportDraft {
   const ReportDraft({
@@ -419,6 +437,21 @@ class ReportDraft {
     required this.aiFields,
     this.fromVoice = false,
     this.edited = false,
+    this.live = false,
+    this.typeCode,
+    this.zoneId,
+    this.taskTypeCodes = const [],
+    this.incidentTypes = const [],
+    this.taskTypes = const [],
+    this.zones = const [],
+    this.duplicateDecision,
+    this.routineTaskDecision,
+    this.reportId,
+    this.confirmedScenarioCode,
+    this.description = '',
+    this.confidenceLevel,
+    this.evidence,
+    this.voicePath,
   });
 
   final String note;
@@ -430,6 +463,22 @@ class ReportDraft {
   final String title;
   final String suggestedAction;
   final bool fromVoice;
+  final bool live;
+  final String? typeCode;
+  final String? zoneId;
+  final List<String> taskTypeCodes;
+  final List<ReportOption> incidentTypes;
+  final List<ReportOption> taskTypes;
+  final List<ReportZoneOption> zones;
+  final String? duplicateDecision;
+  final String? routineTaskDecision;
+  final String? reportId;
+  final String? confirmedScenarioCode;
+  final String description;
+  /// Model self-assessment, not a calibrated probability or approval.
+  final String? confidenceLevel;
+  final String? evidence;
+  final String? voicePath;
 
   /// True once the staff member changed any field the AI filled in.
   final bool edited;
@@ -441,14 +490,14 @@ class ReportDraft {
     // Picking a category also picks its kind unless the staff member already chose one.
     final nextKind = field == ReportField.kind
         ? kind!
-        : field == ReportField.type && aiFields.contains(ReportField.kind)
+        : field == ReportField.type && !live && aiFields.contains(ReportField.kind)
             ? kindOf(text!)
             : this.kind;
     return ReportDraft(
       note: note,
       photoPaths: photoPaths,
       kind: nextKind,
-      type: field == ReportField.type ? text! : type,
+      type: field == ReportField.type ? text! : field == ReportField.kind && live ? '' : type,
       location: field == ReportField.location ? text! : location,
       severity: field == ReportField.severity ? severity! : this.severity,
       title: field == ReportField.title ? text! : title,
@@ -456,12 +505,56 @@ class ReportDraft {
       aiFields: {...aiFields}..remove(field),
       fromVoice: fromVoice,
       edited: true,
+      live: live,
+      typeCode: field == ReportField.type && live ?
+          (nextKind == ReportKind.potentialIncident ? incidentTypes : taskTypes).where((x) => x.name == text).firstOrNull?.code : field == ReportField.kind && live ? null : typeCode,
+      zoneId: zoneId,
+      taskTypeCodes: (field == ReportField.type || field == ReportField.kind) && live ? [] : taskTypeCodes,
+      incidentTypes: incidentTypes,
+      taskTypes: taskTypes,
+      zones: zones,
+      duplicateDecision: field == ReportField.type || field == ReportField.kind ? null : duplicateDecision,
+      routineTaskDecision: field == ReportField.type || field == ReportField.kind ? null : routineTaskDecision,
+      reportId: reportId,
+      confirmedScenarioCode: field == ReportField.type || field == ReportField.kind ? null : confirmedScenarioCode,
+      description: description,
+      confidenceLevel: confidenceLevel,
+      evidence: evidence,
+      voicePath: voicePath,
     );
+  }
+
+  ReportDraft withSelection({String? zoneId, List<String>? taskTypeCodes, String? duplicateDecision, String? routineTaskDecision,
+      String? confirmedScenarioCode, bool clearScenario = false, String? description, bool markEdited = true}) => ReportDraft(
+    note: note, photoPaths: photoPaths, kind: kind, type: type, location: location, severity: severity,
+    title: title, suggestedAction: suggestedAction, aiFields: aiFields, fromVoice: fromVoice, edited: edited || markEdited,
+    live: live, typeCode: typeCode, zoneId: zoneId ?? this.zoneId,
+    taskTypeCodes: taskTypeCodes ?? this.taskTypeCodes, incidentTypes: incidentTypes, taskTypes: taskTypes,
+    zones: zones, duplicateDecision: zoneId != null && zoneId != this.zoneId ? null : duplicateDecision ?? this.duplicateDecision,
+    routineTaskDecision: zoneId != null && zoneId != this.zoneId ? null : routineTaskDecision ?? this.routineTaskDecision, reportId: reportId,
+    confirmedScenarioCode: clearScenario ? null : confirmedScenarioCode ?? this.confirmedScenarioCode,
+    description: description ?? this.description,
+    confidenceLevel: confidenceLevel,
+    evidence: evidence,
+    voicePath: voicePath,
+  );
+
+  ReportDraft defaultZoneFromShift(Shift? shift) {
+    if (!live || shift == null || !shift.isCheckedIn || shift.zoneIds.length != 1 || zoneId != null) return this;
+    final id = shift.zoneIds.single;
+    return zones.any((z) => z.id == id) ? withSelection(zoneId: id, markEdited: false) : this;
   }
 
   String? validate() {
     if (title.trim().isEmpty) return 'Add a short title so staff know what to look for.';
-    if (location.trim().isEmpty) return 'Add where the issue is.';
+    if (location.trim().isEmpty && !live) return 'Add where the issue is.';
+    if (live && zoneId == null) return 'Select a Zone.';
+    if (live && typeCode == null) return 'Select a category.';
+    if (live && kind == ReportKind.potentialIncident && taskTypeCodes.isEmpty) return 'Select at least one corrective Task type.';
+    if (live && confirmedScenarioCode == 'EXPOSED_ELECTRICAL_WIRE' &&
+        !(taskTypeCodes.length == 2 && taskTypeCodes.contains('TT-12') && taskTypeCodes.contains('TT-13'))) {
+      return 'Exposed electrical wire requires TT-12 and TT-13.';
+    }
     return null;
   }
 }
