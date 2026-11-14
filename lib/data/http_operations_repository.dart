@@ -689,6 +689,7 @@ class HttpOperationsRepository implements OperationsRepository {
         routineEligible: raw['routineEligible'] == true)];
     final zones = [for (final raw in zonesData) ReportZoneOption(raw['zoneId'] as String, raw['name'] as String, raw['floorName'] as String)];
     Map<String, dynamic>? ai;
+    String? aiIssue;
     try {
       final form = FormData.fromMap({'note': note});
       for (final path in photoPaths) {
@@ -700,8 +701,9 @@ class HttpOperationsRepository implements OperationsRepository {
             contentType: DioMediaType('audio', 'mp4'))));
       }
       ai = ((await _call(() => _dio.post<Object?>('/api/staff-reports/draft', data: form))) as Map).cast<String, dynamic>();
-    } on _Failure {
-      // The draft can still be filled manually; never invent a classification.
+    } on _Failure catch (failure) {
+      // The draft can still be filled manually; never invent a classification, but say why the AI is missing.
+      aiIssue = reportAiIssue(failure.error);
     }
     final category = ai?['reportCategory'] as String?;
     final kind = category == 'POTENTIAL_INCIDENT' ? ReportKind.potentialIncident : ReportKind.routineRequest;
@@ -731,7 +733,7 @@ class HttpOperationsRepository implements OperationsRepository {
       live: true, typeCode: (selected ?? routine)?.code, incidentTypes: types, taskTypes: tasks, zones: zones, reportId: id,
       taskTypeCodes: taskCodes, zoneId: suggestedZone?.id,
       confidenceLevel: ai?['confidenceLevel'] as String?, evidence: ai?['evidence'] as String?,
-      voicePath: voicePath,
+      voicePath: voicePath, aiIssue: aiIssue,
     );
   }
 
@@ -791,6 +793,20 @@ class HttpOperationsRepository implements OperationsRepository {
       feed.close();
     }
   }
+}
+
+/// Staff-facing reason why `POST /api/staff-reports/draft` gave no suggestion.
+String reportAiIssue(ApiException error) {
+  final code = error.code;
+  final reason = switch (code) {
+    'REPORT_AI_NOT_CONFIGURED' => 'Report AI is not set up on the server (OpenAI key or model missing). Ask the admin to configure StaffReportAi.',
+    'REPORT_AI_UNAVAILABLE' => 'The AI service failed or took too long to answer. Try again, or fill the report yourself.',
+    'REPORT_TRANSCRIPTION_NOT_CONFIGURED' => 'Voice analysis is not set up on the server. Type the note instead of a voice note.',
+    _ when error.isNetwork => 'Cannot reach the server.',
+    _ when error.status == 401 || error.status == 403 => 'This account cannot use report AI. Sign in again with a Staff account.',
+    _ => error.message,
+  };
+  return code == null ? reason : '$reason ($code)';
 }
 
 class ReportOverlapRequired implements Exception {

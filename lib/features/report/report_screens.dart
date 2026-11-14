@@ -489,11 +489,13 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
             body: 'From your ${source.join(' and ')}. ${draft.confidenceLevel == null ? '' : 'Model confidence: ${draft.confidenceLevel} (not calibrated). '}${draft.evidence == null ? '' : 'Basis: ${draft.evidence}. '}Review every field before sending.',
           )
         else
-          const InfoBanner(
+          InfoBanner(
             tone: BannerTone.warning,
             icon: Icons.edit_outlined,
-            title: 'Fill in the report',
-            body: 'AI suggestion is unavailable or incomplete. Select the Zone, category and tasks yourself.',
+            title: draft.aiIssue == null ? 'Fill in the report' : 'AI could not fill the report',
+            body: draft.aiIssue == null
+                ? 'AI suggestion is unavailable or incomplete. Select the Zone, category and tasks yourself.'
+                : '${draft.aiIssue} Select the Zone, category and tasks yourself.',
           ),
         GroupLabel('Report as', trailing: draft.aiFields.contains(ReportField.kind) ? Pill(label: 'AI', fg: c.primary, bg: c.primaryTint) : null),
         Row(children: [

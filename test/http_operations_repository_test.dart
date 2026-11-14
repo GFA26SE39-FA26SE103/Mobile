@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supermarket_staff/core/api/api_exception.dart';
 import 'package:supermarket_staff/data/http_operations_repository.dart';
 import 'package:supermarket_staff/data/models.dart';
 
@@ -244,6 +245,21 @@ void main() {
     expect(draft.live, isTrue);
     expect(draft.aiFields, isEmpty);
     expect(draft.typeCode, isNull);
+  });
+
+  test('a failed AI draft keeps the manual form and says why', () async {
+    final (:repo, :api) = build();
+    api.on('GET /api/staff-reports/incident-types', (_) => []);
+    api.on('GET /api/staff-reports/task-types', (_) => []);
+    api.on('GET /api/staff-reports/zones', (_) => []);
+    api.on('POST /api/staff-reports/draft', (_) => const Problem(503, 'REPORT_AI_NOT_CONFIGURED', 'Report AI is not configured; fill the report manually.'));
+    final draft = await repo.extractReport('wet floor', []);
+    expect(draft.aiFields, isEmpty);
+    expect(draft.aiIssue, contains('REPORT_AI_NOT_CONFIGURED'));
+    expect(draft.aiIssue, contains('not set up on the server'));
+    expect(draft.withSelection(zoneId: 'z').aiIssue, draft.aiIssue);
+    expect(reportAiIssue(const ApiException(status: 422, code: 'REPORT_PHOTO_INVALID', message: 'Use a JPEG or PNG photo of at most 10 MB.')),
+        'Use a JPEG or PNG photo of at most 10 MB. (REPORT_PHOTO_INVALID)');
   });
 
   test('recorded audio reaches draft and final report; transcript is reviewable', () async {

@@ -470,6 +470,7 @@ class ReportDraft {
     this.confidenceLevel,
     this.evidence,
     this.voicePath,
+    this.aiIssue,
   });
 
   final String note;
@@ -497,6 +498,9 @@ class ReportDraft {
   final String? confidenceLevel;
   final String? evidence;
   final String? voicePath;
+
+  /// Why the AI suggestion is missing (server error code and message); null when the AI answered.
+  final String? aiIssue;
 
   /// True once the staff member changed any field the AI filled in.
   final bool edited;
@@ -539,6 +543,7 @@ class ReportDraft {
       confidenceLevel: confidenceLevel,
       evidence: evidence,
       voicePath: voicePath,
+      aiIssue: aiIssue,
     );
   }
 
@@ -555,6 +560,7 @@ class ReportDraft {
     confidenceLevel: confidenceLevel,
     evidence: evidence,
     voicePath: voicePath,
+    aiIssue: aiIssue,
   );
 
   ReportDraft defaultZoneFromShift(Shift? shift) {

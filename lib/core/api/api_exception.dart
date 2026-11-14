@@ -21,12 +21,14 @@ class ApiException implements Exception {
     String? detail;
     if (data is Map) {
       code = data['code'] as String?;
-      detail = (data['detail'] ?? data['title']) as String?;
+      detail = data['detail'] as String?;
+      // Model validation problems only carry a generic title; the field error says what is wrong.
       final errors = data['errors'];
       if (detail == null && errors is Map && errors.isNotEmpty) {
         final first = errors.values.first;
         detail = first is List && first.isNotEmpty ? '${first.first}' : '$first';
       }
+      detail ??= data['title'] as String?;
     }
     return ApiException(
       status: response.statusCode,
