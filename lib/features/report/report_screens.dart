@@ -543,31 +543,6 @@ class _ReportReviewScreenState extends ConsumerState<ReportReviewScreen> {
               onTap: () => _editText(draft, ReportField.location, 'Where is it?', draft.location),
             ),
             Divider(height: 1, color: c.border),
-            if (!draft.live) Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _FieldLabel('Severity', ai: draft.aiFields.contains(ReportField.severity)),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<ReportSeverity>(
-                    showSelectedIcon: false,
-                    segments: [for (final s in ReportSeverity.values) ButtonSegment(value: s, label: Text(s.label))],
-                    selected: {draft.severity},
-                    style: ButtonStyle(
-                      backgroundColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.selected)
-                          ? severityColors(context, draft.severity.severity).fg
-                          : c.surface2),
-                      foregroundColor: WidgetStateProperty.resolveWith(
-                          (states) => states.contains(WidgetState.selected) ? c.onPrimary : c.textMuted),
-                      side: WidgetStatePropertyAll(BorderSide(color: c.border)),
-                    ),
-                    onSelectionChanged: (s) => _update(draft.edit(ReportField.severity, severity: s.first)),
-                  ),
-                ),
-              ]),
-            ),
-            if (!draft.live) Divider(height: 1, color: c.border),
             _Field(
               label: 'Title',
               value: draft.title,

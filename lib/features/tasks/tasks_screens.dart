@@ -8,7 +8,7 @@ import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../shared/format.dart';
 import '../../shared/widgets.dart';
-import 'complete_task_screen.dart' show EvidenceImage;
+import 'complete_task_screen.dart' show EvidenceImage, laneText, reworkText;
 
 class MyTasksScreen extends ConsumerStatefulWidget {
   const MyTasksScreen({super.key});
@@ -324,6 +324,14 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             ],
             Divider(height: 1, color: c.border),
             _Row('Priority', task.raisedFrom == null ? priority.$1 : '${priority.$1} · raised', valueColor: priority.$2),
+            if (task.verificationMode case final mode?) ...[
+              Divider(height: 1, color: c.border),
+              _Row('Verification', mode.label),
+            ],
+            if (task.rejectionCount > 0) ...[
+              Divider(height: 1, color: c.border),
+              _Row('Rejected', task.rejectionCount == 1 ? 'Once' : '${task.rejectionCount} times', valueColor: c.danger),
+            ],
           ]),
         ),
         const SizedBox(height: 12),
@@ -362,20 +370,26 @@ extension on _TaskDetailScreenState {
   List<Widget> _completion(BuildContext context, StaffTask task) {
     final evidence = ref.watch(taskEvidenceProvider(task.taskId)).valueOrNull;
     final latest = evidence?.latest;
+    final mode = task.verificationMode ?? evidence?.verificationMode;
     final banner = switch (task.status) {
       TaskStatus.inProgress when evidence?.inRework ?? false => InfoBanner(
           tone: BannerTone.danger,
           icon: Icons.replay,
           title: 'Rework needed',
-          body: latest?.rejectReason ?? 'The Operator returned this task. Fix it and submit again.',
+          body: reworkText(latest?.rejectReason),
         ),
       TaskStatus.submitted => InfoBanner(
           tone: BannerTone.info,
           icon: Icons.hourglass_top,
           title: 'Waiting for verification',
-          body: latest == null ? 'The Operator reviews your submission.' : 'Submitted at ${hm(latest.submittedAt)}. The Operator reviews your note and photos.',
+          body: '${latest == null ? '' : 'Submitted at ${hm(latest.submittedAt)}. '}${laneText(mode ?? VerificationMode.manual)}',
         ),
-      TaskStatus.verified => const InfoBanner(tone: BannerTone.success, icon: Icons.verified_outlined, title: 'Verified', body: 'The Operator confirmed the work.'),
+      TaskStatus.verified => InfoBanner(
+          tone: BannerTone.success,
+          icon: Icons.verified_outlined,
+          title: 'Verified',
+          body: mode == VerificationMode.auto ? 'The system confirmed the work from the camera data.' : 'The Operator confirmed the work.',
+        ),
       _ => null,
     };
     return [
@@ -398,7 +412,13 @@ class _SubmissionCard extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Your completion note', style: theme.bodySmall),
         const SizedBox(height: 4),
-        Text(submission.note),
+        Text(submission.note.isEmpty ? '—' : submission.note),
+        if (submission.missingPhotoReason case final reason?) ...[
+          const SizedBox(height: 8),
+          Text('Why there is no after photo', style: theme.bodySmall),
+          const SizedBox(height: 4),
+          Text(reason),
+        ],
         if (submission.photos.isNotEmpty) ...[
           const SizedBox(height: 10),
           Row(children: [

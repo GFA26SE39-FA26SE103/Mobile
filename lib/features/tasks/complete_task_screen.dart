@@ -14,6 +14,18 @@ import '../../shared/widgets.dart';
 import '../report/report_screens.dart' show imagePickerProvider;
 
 const _maxNote = 2000;
+const _maxReason = 1000;
+
+/// Shown on the completion and detail screens so Staff know who checks the work (BR-33–BR-35).
+String laneText(VerificationMode mode) => switch (mode) {
+      VerificationMode.auto =>
+        'Checked automatically: once the camera shows the area back to normal, the system verifies the task. If that data is missing, an Operator reviews it instead.',
+      VerificationMode.manual => 'An Operator reviews your note and photos before the task is verified.',
+    };
+
+/// What a rejection means for this Staff member (BR-36): the first returns it for rework, the next takes it away.
+String reworkText(String? reason) =>
+    '${reason ?? 'The Operator returned this task.'} Fix it and submit again. If it is rejected again, the task is reassigned.';
 
 /// One photo slot while it is being filled: the picked file, and how its upload went.
 class _Slot {
@@ -33,23 +45,27 @@ class CompleteTaskScreen extends ConsumerStatefulWidget {
 
 class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
   final _note = TextEditingController();
+  final _reason = TextEditingController();
   final _slots = {for (final k in EvidenceKind.values) k: _Slot()};
   TaskEvidenceState? _evidence;
   String? _loadError;
   String? _error;
   bool _submitting = false;
   bool _submitted = false;
+  bool _autoVerified = false;
 
   @override
   void initState() {
     super.initState();
     _note.addListener(() => setState(() {}));
+    _reason.addListener(() => setState(() {}));
     _load();
   }
 
   @override
   void dispose() {
     _note.dispose();
+    _reason.dispose();
     super.dispose();
   }
 
@@ -65,10 +81,21 @@ class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
 
   bool get _uploading => _slots.values.any((s) => s.uploading);
 
+  StaffTask? get _task => ref.read(tasksProvider).valueOrNull?.where((t) => t.taskId == widget.taskId).firstOrNull;
+
+  /// BR-34: an Incident Task without an after photo needs a note and the reason there is no photo.
+  bool _needsReason(StaffTask? task, TaskEvidenceState e) =>
+      (task?.acceptsNoteInsteadOfPhoto ?? false) && e.draft(EvidenceKind.after) == null;
+
   bool get _ready {
     final e = _evidence;
-    if (e == null || _note.text.trim().isEmpty || _uploading || _submitting) return false;
-    return EvidenceKind.values.every((k) => !e.requires(k) || e.draft(k) != null);
+    if (e == null || _uploading || _submitting) return false;
+    if (!EvidenceKind.values.every((k) => !e.requires(k) || e.draft(k) != null)) return false;
+    final task = _task;
+    final hasNote = _note.text.trim().isNotEmpty;
+    if (_needsReason(task, e)) return hasNote && _reason.text.trim().isNotEmpty;
+    // With an after photo an Incident note is optional; every other Task needs a note.
+    return (task?.acceptsNoteInsteadOfPhoto ?? false) || hasNote;
   }
 
   Future<void> _pick(EvidenceKind kind, ImageSource source) async {
@@ -128,8 +155,15 @@ class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
       _error = null;
     });
     try {
-      await ref.read(operationsRepositoryProvider).submitTask(widget.taskId, _note.text);
-      if (mounted) setState(() => _submitted = true);
+      final e = _evidence;
+      final reason = e != null && _needsReason(_task, e) ? _reason.text : null;
+      final result = await ref.read(operationsRepositoryProvider).submitTask(widget.taskId, _note.text, missingPhotoReason: reason);
+      if (mounted) {
+        setState(() {
+          _submitted = true;
+          _autoVerified = result.status == TaskStatus.verified;
+        });
+      }
     } on OperationFailed catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
@@ -141,7 +175,7 @@ class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context).textTheme;
     final task = ref.watch(tasksProvider).valueOrNull?.where((t) => t.taskId == widget.taskId).firstOrNull;
-    if (_submitted) return _SubmittedView(title: task?.title ?? 'Task');
+    if (_submitted) return _SubmittedView(title: task?.title ?? 'Task', verified: _autoVerified, mode: _evidence?.verificationMode);
 
     final evidence = _evidence;
     return Scaffold(
@@ -167,18 +201,28 @@ class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
                   tone: BannerTone.danger,
                   icon: Icons.replay,
                   title: 'Rework needed',
-                  body: evidence.latest!.rejectReason ?? 'The Operator returned this task.',
+                  body: reworkText(evidence.latest!.rejectReason),
                 ),
                 const SizedBox(height: 12),
               ],
-              InfoBanner(
-                tone: BannerTone.brand,
-                icon: Icons.fact_check_outlined,
-                title: evidence.requiresAfter ? 'Photo evidence is required' : 'Add a completion note',
-                body: evidence.requiresAfter
-                    ? 'Take an after photo when the work is done${evidence.requiresBefore ? ', and a before photo of the problem' : ''}. The Operator checks them before the task is verified.'
-                    : 'Say what you did. Photos are optional but help the Operator verify the work.',
-              ),
+              if (task?.acceptsNoteInsteadOfPhoto ?? false)
+                const InfoBanner(
+                  tone: BannerTone.brand,
+                  icon: Icons.fact_check_outlined,
+                  title: 'Add an after photo, or explain',
+                  body: 'Take an after photo when the work is done. If you cannot, write what you did and why there is no photo. A before photo is optional.',
+                )
+              else
+                const InfoBanner(
+                  tone: BannerTone.brand,
+                  icon: Icons.fact_check_outlined,
+                  title: 'Add a completion note',
+                  body: 'Say what you did. Photos are optional but help verify the work.',
+                ),
+              if (evidence.verificationMode case final mode?) ...[
+                const SizedBox(height: 8),
+                Text('${mode.label}: ${laneText(mode)}', style: theme.bodySmall),
+              ],
               const SizedBox(height: 16),
               for (final kind in EvidenceKind.values) ...[
                 _PhotoSlot(
@@ -198,12 +242,30 @@ class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
                 minLines: 3,
                 maxLines: 6,
                 textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  labelText: 'Completion note',
+                decoration: InputDecoration(
+                  labelText: (task?.acceptsNoteInsteadOfPhoto ?? false) && !_needsReason(task, evidence)
+                      ? 'Completion note (optional)'
+                      : 'Completion note',
                   hintText: 'What did you do? For example: opened counter 4, the queue is cleared.',
                   alignLabelWithHint: true,
                 ),
               ),
+              if (_needsReason(task, evidence)) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  key: const ValueKey('missing-photo-reason'),
+                  controller: _reason,
+                  maxLength: _maxReason,
+                  minLines: 2,
+                  maxLines: 4,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Why is there no after photo?',
+                    hintText: 'For example: the camera was broken, or photos are not allowed in this area.',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 InfoBanner(tone: BannerTone.danger, icon: Icons.error_outline, title: _error!),
@@ -218,7 +280,7 @@ class _CompleteTaskScreenState extends ConsumerState<CompleteTaskScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                _uploading ? 'Waiting for the photo upload to finish.' : 'The task stays in progress until the Operator verifies it.',
+                _uploading ? 'Waiting for the photo upload to finish.' : 'The task stays open until it is verified.',
                 textAlign: TextAlign.center,
                 style: theme.bodySmall,
               ),
@@ -350,8 +412,10 @@ class EvidenceImage extends ConsumerWidget {
 
 /// Figure 35: the submission went through and waits for the Operator.
 class _SubmittedView extends StatelessWidget {
-  const _SubmittedView({required this.title});
+  const _SubmittedView({required this.title, this.verified = false, this.mode});
   final String title;
+  final bool verified;
+  final VerificationMode? mode;
 
   @override
   Widget build(BuildContext context) {
@@ -362,12 +426,16 @@ class _SubmittedView extends StatelessWidget {
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Icon(Icons.hourglass_top, size: 56, color: c.info),
+          Icon(verified ? Icons.verified_outlined : Icons.hourglass_top, size: 56, color: verified ? c.success : c.info),
           const SizedBox(height: 16),
-          Text('Waiting for verification', textAlign: TextAlign.center, style: theme.titleLarge),
+          Text(verified ? 'Verified' : 'Waiting for verification', textAlign: TextAlign.center, style: theme.titleLarge),
           const SizedBox(height: 8),
           Text(
-            '"$title" was submitted. The Operator reviews your note and photos; you get a notification when it is verified or needs rework.',
+            verified
+                ? '"$title" was verified automatically from the camera data.'
+                : mode == VerificationMode.auto
+                    ? '"$title" was submitted. It is verified automatically once the camera shows the area back to normal; you get a notification when it is verified or needs rework.'
+                    : '"$title" was submitted. The Operator reviews your note and photos; you get a notification when it is verified or needs rework.',
             textAlign: TextAlign.center,
             style: theme.bodyMedium,
           ),

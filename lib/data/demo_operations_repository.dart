@@ -719,6 +719,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
       cameraCode: offer.cameraCode,
       eventTypeCode: offer.eventTypeCode,
       raisedFrom: offer.raisedFrom,
+      verificationMode: _laneFor(offer.origin),
     );
     _tasks.value = [task, ..._tasks.value];
     _refreshEligibility();
@@ -765,10 +766,16 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
   int _evidenceSequence = 0;
 
   /// Incident corrective work needs before and after photos in the demo (a cleanliness Incident); other tasks only the note.
+  /// Demo stand-in for the backend lane: camera Tasks are checked automatically, everything else by the Operator.
+  static VerificationMode _laneFor(TaskOrigin origin) =>
+      origin == TaskOrigin.operationalEvent ? VerificationMode.auto : VerificationMode.manual;
+
+  /// Review 2 (BR-34): no photo is mandatory on its own; an Incident Task needs an after photo or a note with a reason.
   TaskEvidenceState _evidenceFor(StaffTask task) => _evidence[task.taskId] ??= TaskEvidenceState(
         taskId: task.taskId,
-        requiresBefore: task.origin == TaskOrigin.incident,
-        requiresAfter: task.origin == TaskOrigin.incident,
+        requiresBefore: false,
+        requiresAfter: false,
+        verificationMode: task.verificationMode ?? _laneFor(task.origin),
       );
 
   StaffTask _ownTask(String taskId) =>
@@ -790,6 +797,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
         rejectionCount: rejectionCount ?? e.rejectionCount,
         drafts: drafts ?? e.drafts,
         submissions: submissions ?? e.submissions,
+        verificationMode: e.verificationMode,
       );
 
   @override
@@ -817,21 +825,28 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
   }
 
   @override
-  Future<StaffTask> submitTask(String taskId, String note) async {
+  Future<StaffTask> submitTask(String taskId, String note, {String? missingPhotoReason}) async {
     await _wait(latency);
     final task = _ownTask(taskId);
     if (task.status == TaskStatus.submitted) return task;
     _requireInProgress(task);
-    if (note.trim().isEmpty) throw const OperationFailed('Completion note is required.');
     final e = _evidenceFor(task);
-    for (final kind in EvidenceKind.values) {
-      if (e.requires(kind) && e.draft(kind) == null) throw OperationFailed('This task needs ${kind == EvidenceKind.before ? 'a before photo' : 'an after photo taken when the work is done'}.');
+    final reason = missingPhotoReason?.trim() ?? '';
+    final hasAfter = e.draft(EvidenceKind.after) != null;
+    // Same rules as the backend: Incident = after photo, or note + missing-photo reason; others = note.
+    if (task.acceptsNoteInsteadOfPhoto && !hasAfter) {
+      if (note.trim().isEmpty) throw const OperationFailed('Add an after photo, or a completion note explaining what you did.');
+      if (reason.isEmpty) throw const OperationFailed('Say why there is no after photo.');
+    } else {
+      if (!task.acceptsNoteInsteadOfPhoto && note.trim().isEmpty) throw const OperationFailed('Completion note is required.');
+      if (reason.isNotEmpty) throw const OperationFailed('A missing-photo reason is only for an Incident task without an after photo.');
     }
     final submission = TaskSubmission(
       submissionId: 'sub-${++_evidenceSequence}',
       note: note.trim(),
       submittedAt: clock(),
       status: ReviewStatus.pending,
+      missingPhotoReason: reason.isEmpty ? null : reason,
       photos: e.drafts,
     );
     _withEvidence(e, drafts: const [], submissions: [submission, ...e.submissions]);
@@ -923,9 +938,6 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
     }
     final kind = kindOf(type);
 
-    final injury = _any(text, ['ngã', 'té', 'bị thương', 'máu', 'fall', 'fell', 'injur', 'blood', 'cháy', 'fire']);
-    final severity = injury ? ReportSeverity.high : (kind == ReportKind.potentialIncident ? ReportSeverity.medium : ReportSeverity.low);
-
     String? spot;
     final aisle = RegExp(r'(?:kệ(?: số)?|aisle)\s*(\d+)').firstMatch(text);
     final counter = RegExp(r'(?:quầy(?: số)?|counter|checkout)\s*(\d+)').firstMatch(text);
@@ -965,12 +977,11 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
       kind: kind,
       type: type,
       location: location,
-      severity: severity,
       title: title,
       suggestedAction: actions[type]!,
       fromVoice: fromVoice,
       aiFields: {
-        if (hasText) ...[ReportField.kind, ReportField.type, ReportField.severity, ReportField.title, ReportField.suggestedAction],
+        if (hasText) ...[ReportField.kind, ReportField.type, ReportField.title, ReportField.suggestedAction],
         if (location.isNotEmpty) ReportField.location,
       },
     );
@@ -986,17 +997,9 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
     final shift = _todayShift;
     final zone = shift != null && shift.isCheckedIn ? shift.zoneName : draft.location.split(' · ').first;
 
-    // BR-16: routine requests may create a Task without an OperationalEvent or Incident.
-    // A potential incident becomes an Incident only when it meets the qualification policy
-    // (demo policy: Medium or High severity); dispatch needs no Operator pre-review.
-    final ReportOutcome outcome;
-    if (draft.kind == ReportKind.routineRequest) {
-      outcome = ReportOutcome.routineTask;
-    } else if (draft.severity == ReportSeverity.low) {
-      outcome = ReportOutcome.awaitingQualification;
-    } else {
-      outcome = ReportOutcome.incidentQualified;
-    }
+    // BR-16: a routine request creates a Task without an OperationalEvent or Incident; a confirmed
+    // potential incident opens an Incident straight away, as the backend does. There is no report severity.
+    final outcome = draft.kind == ReportKind.routineRequest ? ReportOutcome.routineTask : ReportOutcome.incidentQualified;
     final incidentCode = outcome == ReportOutcome.incidentQualified ? 'INC-${++_incidentSequence}' : null;
     final receipt = ReportReceipt(
       reportCode: code,
@@ -1020,7 +1023,7 @@ class DemoOperationsRepository implements OperationsRepository, DemoControls {
         ReportOutcome.awaitingQualification => '${receipt.title} · waiting for incident qualification',
         _ => '${receipt.title} · task offered to ${receipt.offeredTo} staff in $zone',
       },
-      severity: draft.severity.severity,
+      severity: outcome == ReportOutcome.incidentQualified ? Severity.warning : Severity.info,
     );
     return receipt;
   }

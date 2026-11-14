@@ -262,6 +262,22 @@ enum TaskStatus {
   final String label;
 }
 
+/// How a submitted Task is verified (BR-33–BR-35). AUTO: the system checks the camera metric once the event
+/// clears; missing or invalid data moves it to MANUAL. MANUAL: an Operator reviews the evidence.
+enum VerificationMode {
+  auto('Automatic check'),
+  manual('Operator review');
+
+  const VerificationMode(this.label);
+  final String label;
+
+  static VerificationMode? fromCode(Object? code) => switch ('$code'.toUpperCase()) {
+        'AUTO' => VerificationMode.auto,
+        'MANUAL' => VerificationMode.manual,
+        _ => null,
+      };
+}
+
 class StaffTask {
   const StaffTask({
     required this.taskId,
@@ -281,6 +297,8 @@ class StaffTask {
     this.eventTypeCode,
     this.raisedFrom,
     this.eventClearedAt,
+    this.verificationMode,
+    this.rejectionCount = 0,
   });
 
   final String taskId;
@@ -305,6 +323,15 @@ class StaffTask {
   /// Set when the source OperationalEvent recovered while this task was still open. The task
   /// stays with the staff member, who checks the area and finishes it (provisional demo behaviour).
   final DateTime? eventClearedAt;
+
+  /// Null when the server did not say (older backend or demo data).
+  final VerificationMode? verificationMode;
+
+  /// Operator rejections of this Task so far, counted across every Staff member who held it (BR-36).
+  final int rejectionCount;
+
+  /// Incident corrective Tasks take an after photo or, if there is none, a note with the reason (BR-34).
+  bool get acceptsNoteInsteadOfPhoto => origin == TaskOrigin.incident;
 
   bool get isActive => status == TaskStatus.accepted || status == TaskStatus.inProgress;
   bool get isDeferred => status == TaskStatus.accepted && plannedStartAt != null;
@@ -331,6 +358,8 @@ class StaffTask {
         eventTypeCode: eventTypeCode,
         raisedFrom: raisedFrom ?? this.raisedFrom,
         eventClearedAt: eventClearedAt ?? this.eventClearedAt,
+        verificationMode: verificationMode,
+        rejectionCount: rejectionCount,
       );
 }
 
@@ -341,6 +370,10 @@ enum NotificationKind {
   offerEscalated,
   eventEscalated,
   eventCleared,
+  /// The submitted work was verified, by the Operator or automatically.
+  taskVerified,
+  /// The work was returned for rework, or taken away after repeated rejections.
+  taskRejected,
   reportSent,
   shiftStarted,
   shiftChanged,
@@ -414,17 +447,8 @@ const reportCategories = [
 ReportKind kindOf(String category) =>
     reportCategories.firstWhere((c) => c.name == category, orElse: () => reportCategories.last).kind;
 
-enum ReportSeverity {
-  low('Low', Severity.info),
-  medium('Medium', Severity.warning),
-  high('High', Severity.critical);
-
-  const ReportSeverity(this.label, this.severity);
-  final String label;
-  final Severity severity;
-}
-
-enum ReportField { kind, type, location, severity, title, suggestedAction }
+/// A StaffReport has no severity (V7 removed Incident severity); SLA priority comes from the approved policy.
+enum ReportField { kind, type, location, title, suggestedAction }
 
 class ReportOption {
   const ReportOption(this.code, this.name, {this.allowedTaskCodes = const [], this.routineEligible = false});
@@ -449,7 +473,6 @@ class ReportDraft {
     required this.kind,
     required this.type,
     required this.location,
-    required this.severity,
     required this.title,
     required this.suggestedAction,
     required this.aiFields,
@@ -478,7 +501,6 @@ class ReportDraft {
   final ReportKind kind;
   final String type;
   final String location;
-  final ReportSeverity severity;
   final String title;
   final String suggestedAction;
   final bool fromVoice;
@@ -508,7 +530,7 @@ class ReportDraft {
   /// Fields still holding the AI's value; editing a field removes it from this set.
   final Set<ReportField> aiFields;
 
-  ReportDraft edit(ReportField field, {String? text, ReportSeverity? severity, ReportKind? kind}) {
+  ReportDraft edit(ReportField field, {String? text, ReportKind? kind}) {
     // Picking a category also picks its kind unless the staff member already chose one.
     final nextKind = field == ReportField.kind
         ? kind!
@@ -521,7 +543,6 @@ class ReportDraft {
       kind: nextKind,
       type: field == ReportField.type ? text! : field == ReportField.kind && live ? '' : type,
       location: field == ReportField.location ? text! : location,
-      severity: field == ReportField.severity ? severity! : this.severity,
       title: field == ReportField.title ? text! : title,
       suggestedAction: field == ReportField.suggestedAction ? text! : suggestedAction,
       aiFields: {...aiFields}..remove(field),
@@ -549,7 +570,7 @@ class ReportDraft {
 
   ReportDraft withSelection({String? zoneId, List<String>? taskTypeCodes, String? duplicateDecision, String? routineTaskDecision,
       String? confirmedScenarioCode, bool clearScenario = false, String? description, bool markEdited = true}) => ReportDraft(
-    note: note, photoPaths: photoPaths, kind: kind, type: type, location: location, severity: severity,
+    note: note, photoPaths: photoPaths, kind: kind, type: type, location: location,
     title: title, suggestedAction: suggestedAction, aiFields: aiFields, fromVoice: fromVoice, edited: edited || markEdited,
     live: live, typeCode: typeCode, zoneId: zoneId ?? this.zoneId,
     taskTypeCodes: taskTypeCodes ?? this.taskTypeCodes, incidentTypes: incidentTypes, taskTypes: taskTypes,
@@ -819,6 +840,7 @@ class TaskSubmission {
     required this.submittedAt,
     required this.status,
     this.rejectReason,
+    this.missingPhotoReason,
     this.photos = const [],
   });
   final String submissionId;
@@ -826,6 +848,9 @@ class TaskSubmission {
   final DateTime submittedAt;
   final ReviewStatus status;
   final String? rejectReason;
+
+  /// Why an Incident Task was submitted without an after photo.
+  final String? missingPhotoReason;
   final List<EvidencePhoto> photos;
 }
 
@@ -838,11 +863,13 @@ class TaskEvidenceState {
     this.rejectionCount = 0,
     this.drafts = const [],
     this.submissions = const [],
+    this.verificationMode,
   });
   final String taskId;
   final bool requiresBefore;
   final bool requiresAfter;
   final int rejectionCount;
+  final VerificationMode? verificationMode;
   final List<EvidencePhoto> drafts;
   final List<TaskSubmission> submissions;
 

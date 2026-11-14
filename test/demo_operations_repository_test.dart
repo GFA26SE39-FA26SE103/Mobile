@@ -244,7 +244,7 @@ void main() {
   });
 
   group('staff reports', () {
-    test('AI reads a Vietnamese spill note as a potential incident with location and severity', () {
+    test('AI reads a Vietnamese spill note as a potential incident with location and no severity', () {
       withRepo(start, (async, repo) {
         checkInToday(async, repo);
         final draft = run(async, repo.extractReport('Chai nước ngọt bị vỡ ở cuối kệ số 4, sàn trơn, có khách suýt ngã.', const []));
@@ -252,7 +252,6 @@ void main() {
         expect(draft.type, 'Spill / broken item');
         expect(draft.kind, ReportKind.potentialIncident);
         expect(draft.location, 'Zone B · Aisle 4');
-        expect(draft.severity, ReportSeverity.high);
         expect(draft.aiFields, containsAll(ReportField.values));
       });
     });
@@ -283,15 +282,15 @@ void main() {
       });
     });
 
-    test('a low-severity potential incident waits for qualification', () {
+    test('an edited potential incident still opens an Incident; reports carry no severity', () {
       withRepo(start, (async, repo) {
         checkInToday(async, repo);
         final draft = run(async, repo.extractReport('Spill near checkout 3', const []))
-            .edit(ReportField.severity, severity: ReportSeverity.low);
+            .edit(ReportField.title, text: 'Wet floor at checkout 3');
         final receipt = run(async, repo.submitReport(draft));
 
-        expect(receipt.outcome, ReportOutcome.awaitingQualification);
-        expect(receipt.offeredTo, 0);
+        expect(receipt.outcome, ReportOutcome.incidentQualified);
+        expect(receipt.offeredTo, greaterThan(0));
         expect(receipt.edited, isTrue);
       });
     });

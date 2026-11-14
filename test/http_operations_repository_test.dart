@@ -302,7 +302,7 @@ void main() {
 
   test('checked-in single Zone defaults without marking Staff edit; ambiguous zones do not', () {
     const draft = ReportDraft(note: 'wet floor', photoPaths: [], kind: ReportKind.potentialIncident,
-      type: '', location: '', severity: ReportSeverity.low, title: '', suggestedAction: '', aiFields: {},
+      type: '', location: '', title: '', suggestedAction: '', aiFields: {},
       live: true, zones: [ReportZoneOption('z-b', 'Zone B', 'Floor 1')]);
     final checkedIn = Shift(shiftId: 'shift', start: now, end: now.add(const Duration(hours: 8)),
       label: 'Morning', zoneName: 'Zone B', zoneIds: const ['z-b'], checkedInAt: now);
@@ -336,7 +336,7 @@ void main() {
 
   test('confirmed electrical-wire report requires both mandatory task types', () {
     final draft = ReportDraft(note: 'wire', photoPaths: const [], kind: ReportKind.potentialIncident,
-      type: 'Safety hazard', location: '', severity: ReportSeverity.low, title: 'Exposed wire',
+      type: 'Safety hazard', location: '', title: 'Exposed wire',
       suggestedAction: '', aiFields: const {}, live: true, typeCode: 'SAFETY_HAZARD',
       zoneId: 'z-b', taskTypeCodes: const ['TT-12'], confirmedScenarioCode: 'EXPOSED_ELECTRICAL_WIRE');
     expect(draft.validate(), 'Exposed electrical wire requires TT-12 and TT-13.');
@@ -688,5 +688,78 @@ void main() {
     api.on('GET /api/me/tasks', (_) => [taskJson(status: 'SUBMITTED')]);
     expect((await repo.submitTask('task-1', '  Mopped and dried  ')).status, TaskStatus.submitted);
     expect(api.calls.firstWhere((c) => c.path == '/api/tasks/task-1/submit' && c.data is Map && (c.data as Map)['note'] == 'Mopped and dried'), isNotNull);
+  });
+
+  test('Review 2 evidence: an Incident task may send a note with the missing-photo reason; lane and rejections are read', () async {
+    final (:repo, :api) = build();
+    final incident = taskJson()
+      ..['origin'] = 'INCIDENT'
+      ..['verificationMode'] = 'MANUAL'
+      ..['verificationMethod'] = 'OPERATOR_EVIDENCE'
+      ..['rejectionCount'] = 1;
+    final camera = taskJson()
+      ..['taskId'] = 'task-2'
+      ..['verificationMode'] = 'AUTO';
+    api.on('GET /api/me/tasks', (_) => [incident, camera]);
+    await repo.refresh();
+    final tasks = await repo.watchTasks().first;
+    final first = tasks.firstWhere((t) => t.taskId == 'task-1');
+    expect((first.verificationMode, first.rejectionCount, first.acceptsNoteInsteadOfPhoto), (VerificationMode.manual, 1, true));
+    expect(tasks.firstWhere((t) => t.taskId == 'task-2').verificationMode, VerificationMode.auto);
+
+    api.on('GET /api/tasks/task-1/evidence', (_) => {
+          'taskId': 'task-1',
+          'taskStatus': 'SUBMITTED',
+          'verificationMode': 'MANUAL',
+          'verificationMethod': 'OPERATOR_EVIDENCE',
+          'requiresBeforePhoto': false,
+          'requiresAfterPhoto': false,
+          'rejectionCount': 0,
+          'drafts': [],
+          'submissions': [
+            {
+              'submissionId': 'sub-1',
+              'submittedByUserId': 'me',
+              'note': 'Roped off the area and mopped',
+              'submittedAt': utc(now),
+              'reviewStatus': 'PENDING',
+              'rejectReason': null,
+              'missingPhotoReason': 'Phone camera broken',
+              'photos': [],
+            },
+          ],
+        });
+    final evidence = await repo.taskEvidence('task-1');
+    expect((evidence.verificationMode, evidence.requiresAfter, evidence.latest!.missingPhotoReason),
+        (VerificationMode.manual, false, 'Phone camera broken'));
+
+    api.on('POST /api/tasks/task-1/submit', (_) => {'taskId': 'task-1', 'status': 'SUBMITTED'});
+    await repo.submitTask('task-1', ' Roped off and mopped ', missingPhotoReason: ' Phone camera broken ');
+    expect(api.calls.lastWhere((c) => c.path == '/api/tasks/task-1/submit').data, {'note': 'Roped off and mopped', 'missingPhotoReason': 'Phone camera broken'});
+    // With an after photo an Incident note may be empty: nothing extra is sent.
+    await repo.submitTask('task-1', '  ');
+    expect(api.calls.lastWhere((c) => c.path == '/api/tasks/task-1/submit').data, <String, Object?>{});
+  });
+
+  test('verification notifications are told apart from other task updates', () async {
+    final (:repo, :api) = build();
+    Map<String, Object?> note(String id, String type) => {
+          'notificationId': id, 'type': type, 'title': type, 'message': '', 'severity': null,
+          'taskId': 'task-1', 'eventId': null, 'createdAt': utc(now), 'readAt': null,
+        };
+    api.on('GET /api/me/notifications', (_) => [
+          note('n1', 'TASK_VERIFIED'),
+          note('n2', 'TASK_AUTO_VERIFIED'),
+          note('n3', 'TASK_REJECTED'),
+          note('n4', 'TASK_VERIFICATION_EXCEPTION'),
+        ]);
+    await repo.refresh();
+    final kinds = {for (final n in await repo.watchNotifications().first) n.id: n.kind};
+    expect(kinds, {
+      'n1': NotificationKind.taskVerified,
+      'n2': NotificationKind.taskVerified,
+      'n3': NotificationKind.taskRejected,
+      'n4': NotificationKind.general,
+    });
   });
 }

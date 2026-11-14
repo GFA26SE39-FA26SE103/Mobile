@@ -91,15 +91,23 @@ attempt or priority changes. The countdown uses the server's `nextAlertAt` (retr
 
 ## Completion (MF-03)
 
-From a task in progress, **Complete task** opens the completion screen: a required completion note
-and before/after photo slots. Incident corrective tasks require an after photo, and a before photo
-when the Incident type requires it; other tasks only need the note. Each photo uploads as soon as it
-is picked; a failed upload keeps the picture and offers **Retry upload**, and uploading the same kind
-again replaces the draft on the server, so retries never duplicate evidence. Submit is enabled only
-when the note and every required photo are in. The Operator then verifies (task VERIFIED) or rejects
-with a reason (task back to IN_PROGRESS, shown as "Rework needed"); after a second rejection the
-task leaves this Staff member and the Operator assigns someone else. Server errors such as
-`EVIDENCE_REQUIRED`, `TASK_NOT_IN_PROGRESS` or `EVIDENCE_FORMAT_INVALID` are shown as sent.
+From a task in progress, **Complete task** opens the completion screen with optional before/after
+photo slots (Review 2, BR-34). An Incident corrective task needs an after photo; without one, the app
+asks for a completion note and **Why is there no after photo?**, sent as `missingPhotoReason` (at most
+1000 characters). With an after photo the Incident note is optional. Every other task needs a note and
+never sends `missingPhotoReason`. Each photo uploads as soon as it is picked; a failed upload keeps the
+picture and offers **Retry upload**, and uploading the same kind again replaces the draft on the server.
+
+Task, offer and evidence views carry `verificationMode`. The app shows it as **Automatic check** (AUTO:
+verified from the camera metric once the event clears; missing data moves it to an Operator) or
+**Operator review** (MANUAL). A submit that comes back `VERIFIED` is shown as verified automatically.
+`rejectionCount` is shown on the task detail. The first rejection returns the task as "Rework needed";
+the next one takes it away and it is reassigned (BR-36). Notifications `TASK_VERIFIED` and
+`TASK_AUTO_VERIFIED` show as verified, `TASK_REJECTED` as returned. Server errors such as
+`EVIDENCE_REQUIRED`, `MISSING_PHOTO_REASON_REQUIRED`, `MISSING_PHOTO_REASON_NOT_APPLICABLE` or
+`TASK_NOT_IN_PROGRESS` are shown as sent.
+
+Reports carry no severity: the app neither shows nor sends one (V7 removed Incident severity).
 
 ## Not on the backend yet
 

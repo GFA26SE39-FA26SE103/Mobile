@@ -74,7 +74,8 @@ abstract class OperationsRepository {
   Future<TaskEvidenceState> removeEvidence(String taskId, String evidenceId);
 
   /// In progress → Submitted. Refused with [OperationFailed] while required photos or the note are missing.
-  Future<StaffTask> submitTask(String taskId, String note);
+  /// [missingPhotoReason] only for an Incident Task submitted with a note instead of an after photo (BR-34).
+  Future<StaffTask> submitTask(String taskId, String note, {String? missingPhotoReason});
 
   /// Bytes of a photo the server holds ([EvidencePhoto.imageUrl]).
   Future<List<int>> evidenceImage(String imageUrl);

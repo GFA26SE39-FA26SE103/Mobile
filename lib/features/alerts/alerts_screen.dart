@@ -120,6 +120,8 @@ class _NotificationTile extends StatelessWidget {
       NotificationKind.offerEscalated => Icons.support_agent,
       NotificationKind.eventEscalated => Icons.trending_up,
       NotificationKind.eventCleared => Icons.check_circle_outline,
+      NotificationKind.taskVerified => Icons.verified_outlined,
+      NotificationKind.taskRejected => Icons.replay,
       NotificationKind.reportSent => Icons.send_outlined,
       NotificationKind.shiftStarted => Icons.login,
       NotificationKind.shiftChanged => Icons.event_note_outlined,

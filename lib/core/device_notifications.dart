@@ -270,6 +270,8 @@ class NotificationRelay {
     NotificationKind.offerTaken ||
     NotificationKind.offerEscalated ||
     NotificationKind.eventCleared ||
+    NotificationKind.taskVerified ||
+    NotificationKind.taskRejected ||
     NotificationKind.reportSent ||
     NotificationKind.general => NotifyChannel.taskUpdates,
     // Check-in happens on this phone; telling the user again adds nothing.

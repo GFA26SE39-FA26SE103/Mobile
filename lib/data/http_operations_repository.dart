@@ -329,6 +329,8 @@ class HttpOperationsRepository implements OperationsRepository {
       startedAt: _timeOrNull(json['startedAt']),
       cameraCode: json['cameraCode'] as String?,
       eventClearedAt: _timeOrNull(json['eventClearedAt']),
+      verificationMode: VerificationMode.fromCode(json['verificationMode']),
+      rejectionCount: (json['rejectionCount'] as int?) ?? 0,
     );
   }
 
@@ -339,6 +341,8 @@ class HttpOperationsRepository implements OperationsRepository {
         'TASK_NEEDS_ASSIGNMENT' => NotificationKind.offerEscalated,
         'TASK_PRIORITY_RAISED' => NotificationKind.eventEscalated,
         'EVENT_CLEARED' => NotificationKind.eventCleared,
+        'TASK_VERIFIED' || 'TASK_AUTO_VERIFIED' => NotificationKind.taskVerified,
+        'TASK_REJECTED' => NotificationKind.taskRejected,
         _ when type.startsWith('SWAP_') => NotificationKind.swapUpdated,
         _ when type.startsWith('SHIFT_') => NotificationKind.shiftChanged,
         _ => NotificationKind.general,
@@ -595,6 +599,7 @@ class HttpOperationsRepository implements OperationsRepository {
       requiresBefore: json['requiresBeforePhoto'] as bool,
       requiresAfter: json['requiresAfterPhoto'] as bool,
       rejectionCount: (json['rejectionCount'] as int?) ?? 0,
+      verificationMode: VerificationMode.fromCode(json['verificationMode']),
       drafts: [for (final p in json['drafts'] as List) _photoOf(p as Map)],
       submissions: [
         for (final s in json['submissions'] as List)
@@ -608,6 +613,7 @@ class HttpOperationsRepository implements OperationsRepository {
               _ => ReviewStatus.pending,
             },
             rejectReason: s['rejectReason'] as String?,
+            missingPhotoReason: s['missingPhotoReason'] as String?,
             photos: [for (final p in s['photos'] as List) _photoOf(p as Map)],
           ),
       ],
@@ -642,8 +648,12 @@ class HttpOperationsRepository implements OperationsRepository {
       _completionCall(() async => _evidenceOf(await _call(() => _dio.delete<Object?>('/api/tasks/$taskId/evidence/$evidenceId'))));
 
   @override
-  Future<StaffTask> submitTask(String taskId, String note) => _completionCall(() async {
-        await _post('/api/tasks/$taskId/submit', {'note': note.trim()});
+  Future<StaffTask> submitTask(String taskId, String note, {String? missingPhotoReason}) => _completionCall(() async {
+        final reason = missingPhotoReason?.trim();
+        await _post('/api/tasks/$taskId/submit', {
+          if (note.trim().isNotEmpty) 'note': note.trim(),
+          if (reason != null && reason.isNotEmpty) 'missingPhotoReason': reason,
+        });
         await _tasks.refresh();
         _refreshFast();
         return (_tasks.value ?? const <StaffTask>[]).firstWhere((t) => t.taskId == taskId,
@@ -724,7 +734,7 @@ class HttpOperationsRepository implements OperationsRepository {
     final combinedNote = [note.trim(), if (transcript != null) transcript.trim()].where((s) => s.isNotEmpty).join('\n');
     return ReportDraft(
       note: combinedNote, photoPaths: photoPaths, kind: kind, type: (selected ?? routine)?.name ?? '',
-      location: (ai?['locationDescription'] as String?) ?? '', severity: ReportSeverity.low,
+      location: (ai?['locationDescription'] as String?) ?? '',
       title: (ai?['title'] as String?) ?? '', suggestedAction: '', fromVoice: fromVoice,
       description: (ai?['description'] as String?) ?? combinedNote,
       aiFields: ai == null ? {} : {if (selected != null) ReportField.type, if (category != null) ReportField.kind,

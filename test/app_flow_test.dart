@@ -215,7 +215,7 @@ void main() {
     await settle(tester);
 
     expect(find.widgetWithText(AppBar, 'Review report'), findsOneWidget);
-    expect(text('AI filled 6 fields'), findsOneWidget);
+    expect(text('AI filled 5 fields'), findsOneWidget);
     expect(text('Spill / broken item'), findsOneWidget);
     expect(text('Zone B · Aisle 4'), findsOneWidget);
 
@@ -224,7 +224,7 @@ void main() {
     await tester.enterText(find.byType(TextField).last, 'Broken bottle, wet floor, aisle 4');
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await settle(tester);
-    expect(text('AI filled 5 fields'), findsOneWidget);
+    expect(text('AI filled 4 fields'), findsOneWidget);
 
     await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Confirm and send'), 200, scrollable: find.byType(Scrollable).first);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Confirm and send'));
@@ -327,7 +327,9 @@ void main() {
     await settle(tester);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Handle now'));
     await settle(tester);
-
+    // The detail now also shows who verifies the work, so the button can sit below the fold.
+    expect(text('Verification'), findsOneWidget);
+    await tester.scrollUntilVisible(find.widgetWithText(FilledButton, 'Complete task'), 300, scrollable: find.byType(Scrollable).first);
     await tapVisible(tester, find.widgetWithText(FilledButton, 'Complete task'));
     await settle(tester);
     expect(find.widgetWithText(AppBar, 'Complete task'), findsOneWidget);
