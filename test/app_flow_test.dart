@@ -1,8 +1,15 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supermarket_staff/core/theme/app_colors.dart';
+import 'package:supermarket_staff/core/theme/app_theme.dart';
 import 'package:supermarket_staff/data/models.dart';
+import 'package:supermarket_staff/data/providers.dart';
 import 'package:supermarket_staff/features/auth/auth_repository.dart';
 import 'package:supermarket_staff/features/report/recorded_voice_input.dart';
+import 'package:supermarket_staff/features/tasks/tasks_screens.dart';
 
 import 'helpers.dart';
 
@@ -35,6 +42,46 @@ class _FakeReportRecorder implements ReportAudioRecorder {
 }
 
 void main() {
+  testWidgets('an in-progress Clean Spill task shows its original report photo', (tester) async {
+    const taskId = 'clean-spill';
+    const photoUrl = '/api/tasks/$taskId/report-photos/photo-1/image';
+    final now = DateTime(2026, 11, 22, 10);
+    final task = StaffTask(
+      taskId: taskId,
+      origin: TaskOrigin.incident,
+      sourceCode: 'INC-SPILL',
+      title: 'Clean Spill',
+      priority: Severity.warning,
+      zoneName: 'Household Aisle',
+      location: 'First Floor',
+      instructions: 'Clean the spill.',
+      createdAt: now,
+      acceptedAt: now,
+      status: TaskStatus.inProgress,
+    );
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        tasksProvider.overrideWith((ref) => Stream.value([task])),
+        taskEvidenceProvider(taskId).overrideWith((ref) async => const TaskEvidenceState(
+          taskId: taskId, requiresBefore: false, requiresAfter: false, reportPhotoUrls: [photoUrl],
+        )),
+        evidenceImageProvider(photoUrl).overrideWith((ref) async => base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/2sAAAAASUVORK5CYII=',
+        )),
+      ],
+      child: MaterialApp(
+        theme: buildTheme(AppColors.light, Brightness.light),
+        home: const TaskDetailScreen(taskId: taskId),
+      ),
+    ));
+    await settle(tester);
+    expect(text('Report photos'), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
+    await tapVisible(tester, find.byTooltip('Open report photo 1'));
+    await settle(tester);
+    expect(find.widgetWithText(AppBar, 'Report photo 1'), findsOneWidget);
+  });
+
   final recorder = _FakeReportRecorder();
   appTest('report voice recording enables review only after a successful stop', (tester, app) async {
     await goTab(tester, 'Report');

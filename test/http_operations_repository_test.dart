@@ -645,6 +645,7 @@ void main() {
   test('evidence: parse the state, upload a photo as multipart, submit the note, map refusals', () async {
     final (:repo, :api) = build();
     Map<String, Object?> photo(String id, String type) => {'evidenceId': id, 'evidenceType': type, 'imageUrl': '/api/tasks/task-1/evidence/$id/image', 'capturedAt': utc(now)};
+    const reportPhotoUrl = '/api/tasks/task-1/report-photos/photo-1/image';
     final state = {
       'taskId': 'task-1',
       'taskStatus': 'IN_PROGRESS',
@@ -652,6 +653,7 @@ void main() {
       'requiresAfterPhoto': true,
       'rejectionCount': 1,
       'drafts': [photo('ev-2', 'AFTER_PHOTO')],
+      'reportPhotos': [{'mediaId': 'photo-1', 'imageUrl': reportPhotoUrl}],
       'submissions': [
         {
           'submissionId': 'sub-1',
@@ -669,6 +671,7 @@ void main() {
     final evidence = await repo.taskEvidence('task-1');
     expect((evidence.requiresBefore, evidence.requiresAfter, evidence.rejectionCount, evidence.inRework), (true, true, 1, true));
     expect(evidence.draft(EvidenceKind.after)!.evidenceId, 'ev-2');
+    expect(evidence.reportPhotoUrls, [reportPhotoUrl]);
     expect(evidence.latest!.rejectReason, 'Still wet');
     expect(evidence.latest!.photos.single.kind, EvidenceKind.before);
 

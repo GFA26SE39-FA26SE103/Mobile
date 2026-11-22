@@ -863,6 +863,7 @@ class TaskEvidenceState {
     this.rejectionCount = 0,
     this.drafts = const [],
     this.submissions = const [],
+    this.reportPhotoUrls = const [],
     this.verificationMode,
   });
   final String taskId;
@@ -872,6 +873,7 @@ class TaskEvidenceState {
   final VerificationMode? verificationMode;
   final List<EvidencePhoto> drafts;
   final List<TaskSubmission> submissions;
+  final List<String> reportPhotoUrls;
 
   bool requires(EvidenceKind kind) => kind == EvidenceKind.before ? requiresBefore : requiresAfter;
   EvidencePhoto? draft(EvidenceKind kind) => drafts.where((d) => d.kind == kind).firstOrNull;

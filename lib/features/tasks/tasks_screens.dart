@@ -272,10 +272,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       Severity.info => ('Low', c.info),
     };
     final chips = [?_scheduleChip(context, task, now), ..._eventChips(context, task)];
+    final evidence = ref.watch(taskEvidenceProvider(task.taskId)).valueOrNull;
+    final reportPhotos = evidence?.reportPhotoUrls ?? const <String>[];
     return Scaffold(
       appBar: AppBar(title: const Text('Task detail')),
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 28), children: [
-        Container(
+        if (reportPhotos.isNotEmpty)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SeverityChip(task.priority, solid: task.priority == Severity.critical),
+          )
+        else Container(
           height: 150,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(color: c.placeholder, borderRadius: BorderRadius.circular(14)),
@@ -334,6 +341,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             ],
           ]),
         ),
+        if (reportPhotos.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _ReportPhotos(urls: reportPhotos),
+        ],
         const SizedBox(height: 12),
         InfoBanner(
           tone: BannerTone.brand,
@@ -341,7 +352,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           title: 'What to do',
           body: task.instructions.isEmpty ? 'Check the area and resolve the issue.' : task.instructions,
         ),
-        ..._completion(context, task),
+        ..._completion(task, evidence),
         const SizedBox(height: 20),
         if (task.status == TaskStatus.accepted) ...[
           FilledButton.icon(
@@ -367,8 +378,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
 extension on _TaskDetailScreenState {
   /// Where the completion stands: rework asked for, waiting for verification, or verified, with the latest submission.
-  List<Widget> _completion(BuildContext context, StaffTask task) {
-    final evidence = ref.watch(taskEvidenceProvider(task.taskId)).valueOrNull;
+  List<Widget> _completion(StaffTask task, TaskEvidenceState? evidence) {
     final latest = evidence?.latest;
     final mode = task.verificationMode ?? evidence?.verificationMode;
     final banner = switch (task.status) {
@@ -397,6 +407,42 @@ extension on _TaskDetailScreenState {
       if (latest != null && task.status != TaskStatus.inProgress) ...[const SizedBox(height: 12), _SubmissionCard(submission: latest)],
     ];
   }
+}
+
+class _ReportPhotos extends StatelessWidget {
+  const _ReportPhotos({required this.urls});
+  final List<String> urls;
+
+  @override
+  Widget build(BuildContext context) => AppCard(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Report photos', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final (index, url) in urls.indexed)
+              Tooltip(
+                message: 'Open report photo ${index + 1}',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => showDialog<void>(
+                    context: context,
+                    builder: (context) => Dialog.fullscreen(
+                      child: Scaffold(
+                        appBar: AppBar(title: Text('Report photo ${index + 1}'), leading: const CloseButton()),
+                        body: Center(child: InteractiveViewer(child: EvidenceImage(url: url, fit: BoxFit.contain))),
+                      ),
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(width: 88, height: 88, child: EvidenceImage(url: url)),
+                  ),
+                ),
+              ),
+          ]),
+        ]),
+      );
 }
 
 class _SubmissionCard extends StatelessWidget {

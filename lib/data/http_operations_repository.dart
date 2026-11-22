@@ -601,6 +601,10 @@ class HttpOperationsRepository implements OperationsRepository {
       rejectionCount: (json['rejectionCount'] as int?) ?? 0,
       verificationMode: VerificationMode.fromCode(json['verificationMode']),
       drafts: [for (final p in json['drafts'] as List) _photoOf(p as Map)],
+      reportPhotoUrls: [
+        for (final photo in (json['reportPhotos'] as List? ?? const []))
+          (photo as Map)['imageUrl'] as String,
+      ],
       submissions: [
         for (final s in json['submissions'] as List)
           TaskSubmission(
