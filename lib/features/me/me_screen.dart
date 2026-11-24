@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/config.dart';
+import '../../core/providers.dart';
+import '../../core/push_notifications.dart';
 import '../../core/theme/app_colors.dart';
 import '../../data/providers.dart';
 import '../../shared/widgets.dart';
@@ -145,6 +147,18 @@ class MeScreen extends ConsumerWidget {
               subtitle: Text(AppConfig.mockAuth
                   ? 'Demo sign-in (no server)'
                   : '${AppConfig.apiUrl}${AppConfig.demoOperations ? ' · shifts and tasks on demo data' : ''}'),
+            ),
+            Divider(height: 1, color: c.border),
+            ValueListenableBuilder<PushStatus>(
+              valueListenable: ref.watch(pushRegistrationProvider).status,
+              builder: (context, status, _) => ListTile(
+                leading: Icon(
+                  status == PushStatus.registered ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                  color: status == PushStatus.registered ? c.success : c.textMuted,
+                ),
+                title: const Text('Push notifications'),
+                subtitle: Text(status.label),
+              ),
             ),
             Divider(height: 1, color: c.border),
             ListTile(

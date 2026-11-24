@@ -55,6 +55,68 @@ void main() {
   );
 
   test(
+    'a device id the server does not know is dropped and the phone registers afresh',
+    () async {
+      final messages = FakePushMessaging('token-abcdefghijklmnopqrstuvwxyz');
+      final api = FakeDeviceApi(unknownIds: {'dev-server-device'});
+      final store = MemoryDeviceIdentityStore()..deviceId = 'dev-server-device';
+      final registration = PushRegistration(
+        messaging: messages,
+        api: api,
+        identityStore: store,
+        platform: 'ANDROID',
+      );
+
+      await registration.start();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(api.registrations, [
+        ('token-abcdefghijklmnopqrstuvwxyz', 'dev-server-device'),
+        ('token-abcdefghijklmnopqrstuvwxyz', null),
+      ]);
+      expect(store.deviceId, 'device-1');
+      expect(registration.status.value, PushStatus.registered);
+      await registration.dispose();
+    },
+  );
+
+  test(
+    'the last known push target is sent again when Firebase does not report it',
+    () async {
+      // Firebase reports the target only when it changes; this installation registered earlier.
+      final messages = FakePushMessaging(null);
+      final api = FakeDeviceApi();
+      final store = MemoryDeviceIdentityStore()..token = 'known-token-abcdefghijklmnopqrstuvwxyz';
+      final registration = PushRegistration(
+        messaging: messages,
+        api: api,
+        identityStore: store,
+        platform: 'ANDROID',
+      );
+
+      await registration.start();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(api.registrations, [('known-token-abcdefghijklmnopqrstuvwxyz', null)]);
+      expect(store.deviceId, 'device-1');
+      await registration.dispose();
+    },
+  );
+
+  test('a build without Firebase configuration reports push as off', () async {
+    final registration = PushRegistration(
+      messaging: const NoopPushMessaging(),
+      api: FakeDeviceApi(),
+      identityStore: MemoryDeviceIdentityStore(),
+      platform: 'ANDROID',
+    );
+
+    await registration.start();
+
+    expect(registration.status.value, PushStatus.notConfigured);
+  });
+
+  test(
     'explicit logout revokes the registered device and clears local identity',
     () async {
       final messages = FakePushMessaging('token-abcdefghijklmnopqrstuvwxyz');
@@ -108,6 +170,10 @@ class FakePushMessaging implements PushMessaging {
 }
 
 class FakeDeviceApi implements DeviceRegistrationApi {
+  FakeDeviceApi({this.unknownIds = const {}});
+
+  /// Device ids this server has never issued, e.g. ones issued by the dev API.
+  final Set<String> unknownIds;
   final registrations = <(String, String?)>[];
   final revocations = <String>[];
 
@@ -118,6 +184,7 @@ class FakeDeviceApi implements DeviceRegistrationApi {
     String? deviceId,
   }) async {
     registrations.add((fcmToken, deviceId));
+    if (unknownIds.contains(deviceId)) throw const DeviceRegistrationNotFound();
     return deviceId ?? 'device-1';
   }
 
@@ -127,6 +194,13 @@ class FakeDeviceApi implements DeviceRegistrationApi {
 
 class MemoryDeviceIdentityStore implements DeviceIdentityStore {
   String? deviceId;
+  String? token;
+
+  @override
+  Future<String?> readToken() async => token;
+
+  @override
+  Future<void> writeToken(String value) async => token = value;
 
   @override
   Future<void> clear() async => deviceId = null;

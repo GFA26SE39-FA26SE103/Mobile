@@ -85,6 +85,11 @@ class NoopPushMessaging implements PushMessaging {
   Future<void> requestPermission() async {}
 }
 
+/// The server does not know the stored device id (another server or another account).
+class DeviceRegistrationNotFound implements Exception {
+  const DeviceRegistrationNotFound();
+}
+
 abstract class DeviceRegistrationApi {
   Future<String> register({
     required String fcmToken,
@@ -104,10 +109,16 @@ class HttpDeviceRegistrationApi implements DeviceRegistrationApi {
     required String platform,
     String? deviceId,
   }) async {
-    final response = await _dio.post<Map<String, dynamic>>(
-      '/api/me/devices',
-      data: {'fcmToken': fcmToken, 'platform': platform, 'deviceId': ?deviceId},
-    );
+    final Response<Map<String, dynamic>> response;
+    try {
+      response = await _dio.post<Map<String, dynamic>>(
+        '/api/me/devices',
+        data: {'fcmToken': fcmToken, 'platform': platform, 'deviceId': ?deviceId},
+      );
+    } on DioException catch (error) {
+      if (deviceId != null && error.response?.statusCode == 404) throw const DeviceRegistrationNotFound();
+      rethrow;
+    }
     final registered = response.data?['deviceId']?.toString();
     if (registered == null || registered.isEmpty) {
       throw const FormatException(
@@ -122,10 +133,14 @@ class HttpDeviceRegistrationApi implements DeviceRegistrationApi {
       _dio.delete<void>('/api/me/devices/$deviceId');
 }
 
+/// Keeps the backend device id (per signed-in account) and the last push target this
+/// installation received from Firebase (per installation, kept across sign-outs).
 abstract class DeviceIdentityStore {
   Future<String?> read();
   Future<void> write(String value);
   Future<void> clear();
+  Future<String?> readToken();
+  Future<void> writeToken(String value);
 }
 
 class SecureDeviceIdentityStore implements DeviceIdentityStore {
@@ -133,20 +148,31 @@ class SecureDeviceIdentityStore implements DeviceIdentityStore {
     : _storage = storage ?? const FlutterSecureStorage();
   final FlutterSecureStorage _storage;
   static const _key = 'push.device-id';
+  static const _tokenKey = 'push.target';
 
   @override
-  Future<String?> read() async {
+  Future<String?> read() => _read(_key);
+
+  @override
+  Future<void> write(String value) => _write(_key, value);
+
+  @override
+  Future<String?> readToken() => _read(_tokenKey);
+
+  @override
+  Future<void> writeToken(String value) => _write(_tokenKey, value);
+
+  Future<String?> _read(String key) async {
     try {
-      return await _storage.read(key: _key);
+      return await _storage.read(key: key);
     } catch (_) {
       return null;
     }
   }
 
-  @override
-  Future<void> write(String value) async {
+  Future<void> _write(String key, String value) async {
     try {
-      await _storage.write(key: _key, value: value);
+      await _storage.write(key: key, value: value);
     } catch (_) {
       // Registration can retry after the next token refresh or app launch.
     }
@@ -180,33 +206,53 @@ class PushRegistration {
   Future<void> _pending = Future.value();
   bool _started = false;
 
+  /// What the Me screen shows, so a tester can see whether this phone can receive push.
+  final status = ValueNotifier<PushStatus>(PushStatus.idle);
+
   Future<void> start() async {
-    if (_started || !messaging.configured) return;
+    if (!messaging.configured) {
+      status.value = PushStatus.notConfigured;
+      return;
+    }
+    if (_started) return;
     _started = true;
+    status.value = PushStatus.registering;
     try {
       _refresh = messaging.registrationRefreshes.listen(_queueRegistration);
+      // Firebase reports the push target only when it changes, so an installation that was
+      // registered before (another account, an earlier launch) would never be sent again.
+      // Re-send the last known target for whoever is signed in now.
+      final known = await identityStore.readToken();
+      if (known != null && known.isNotEmpty) _queueRegistration(known);
       await messaging.requestPermission();
       await messaging.register();
     } catch (error) {
       debugPrint('Push registration unavailable: ${error.runtimeType}');
+      status.value = PushStatus.failed;
     }
   }
 
   void _queueRegistration(String token) {
-    _pending = _pending.then((_) => _register(token)).catchError((
-      Object error,
-    ) {
+    _pending = _pending.then((_) => _register(token)).then((_) {
+      status.value = PushStatus.registered;
+    }).catchError((Object error) {
       debugPrint('Push token refresh failed: ${error.runtimeType}');
+      status.value = PushStatus.failed;
     });
   }
 
   Future<void> _register(String token) async {
+    await identityStore.writeToken(token);
     final existing = await identityStore.read();
-    final deviceId = await api.register(
-      fcmToken: token,
-      platform: platform,
-      deviceId: existing,
-    );
+    String deviceId;
+    try {
+      deviceId = await api.register(fcmToken: token, platform: platform, deviceId: existing);
+    } on DeviceRegistrationNotFound {
+      // The stored id belongs to another server (e.g. an earlier build on the dev API) or to
+      // another account. Forget it and register this installation afresh.
+      await identityStore.clear();
+      deviceId = await api.register(fcmToken: token, platform: platform);
+    }
     await identityStore.write(deviceId);
   }
 
@@ -228,5 +274,17 @@ class PushRegistration {
     await _refresh?.cancel();
     _refresh = null;
     await _pending;
+    if (status.value != PushStatus.notConfigured) status.value = PushStatus.idle;
   }
+}
+
+enum PushStatus {
+  idle('Starts after sign-in'),
+  notConfigured('Off: this build has no Firebase configuration'),
+  registering('Registering this phone with the server…'),
+  registered('On: this phone receives task offers when the app is closed'),
+  failed('Not registered: notifications appear only while the app runs');
+
+  const PushStatus(this.label);
+  final String label;
 }

@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -8,6 +10,11 @@ android {
     namespace = "vn.edu.fpt.gfa26se39.supermarket_staff"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
+    // Native Firebase values below are generated resources.
+    buildFeatures {
+        resValues = true
+    }
 
     compileOptions {
         // flutter_local_notifications needs Java 8+ library desugaring on older Android versions.
@@ -25,6 +32,20 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Firebase must exist natively before any Dart code runs: a push that arrives while the
+        // app is closed starts only the Android process. The client values come from the same
+        // --dart-define(-from-file) entries the Dart side uses, so no google-services.json is needed.
+        val firebase = dartDefines()
+        val firebaseResources = mapOf(
+            "google_app_id" to "FIREBASE_APP_ID",
+            "google_api_key" to "FIREBASE_API_KEY",
+            "gcm_defaultSenderId" to "FIREBASE_MESSAGING_SENDER_ID",
+            "project_id" to "FIREBASE_PROJECT_ID",
+        )
+        if (firebaseResources.values.all { !firebase[it].isNullOrBlank() }) {
+            firebaseResources.forEach { (resource, key) -> resValue("string", resource, firebase.getValue(key)) }
+        }
     }
 
     buildTypes {
@@ -35,6 +56,15 @@ android {
         }
     }
 }
+
+/** The `--dart-define` values Flutter passes to Gradle as comma-separated base64 `KEY=VALUE` pairs. */
+fun dartDefines(): Map<String, String> =
+    (project.findProperty("dart-defines") as String?).orEmpty()
+        .split(',')
+        .filter { it.isNotBlank() }
+        .map { String(Base64.getDecoder().decode(it), Charsets.UTF_8) }
+        .filter { it.contains('=') }
+        .associate { it.substringBefore('=') to it.substringAfter('=') }
 
 kotlin {
     compilerOptions {

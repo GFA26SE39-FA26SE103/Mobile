@@ -177,4 +177,9 @@ class _MemoryDeviceStore implements DeviceIdentityStore {
   Future<String?> read() async => value;
   @override
   Future<void> write(String value) async => this.value = value;
+  String? token;
+  @override
+  Future<String?> readToken() async => token;
+  @override
+  Future<void> writeToken(String value) async => token = value;
 }
