@@ -39,6 +39,9 @@ class PushPayload {
     final type = data['type']?.toString().trim().toUpperCase() ?? '';
     final route = data['route']?.toString().trim() ?? '';
     if (id.isEmpty || type.isEmpty || !route.startsWith('/')) return null;
+    // Data-only task offers carry their text in data so the app can build a wake-screen notification.
+    title ??= data['title']?.toString();
+    body ??= data['body']?.toString();
     return PushPayload(
       notificationId: id,
       type: type,

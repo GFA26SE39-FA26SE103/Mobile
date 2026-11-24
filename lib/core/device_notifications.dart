@@ -157,6 +157,9 @@ class LocalDeviceNotifier implements DeviceNotifier {
           channelDescription: channel.description,
           importance: channel.importance,
           priority: urgent ? Priority.max : Priority.defaultPriority,
+          // Task offers behave like an incoming call: wake the screen and show on the lock screen.
+          fullScreenIntent: urgent,
+          visibility: NotificationVisibility.public,
           category: urgent
               ? AndroidNotificationCategory.call
               : AndroidNotificationCategory.event,

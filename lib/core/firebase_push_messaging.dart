@@ -2,7 +2,28 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 
+import 'device_notifications.dart';
 import 'push_notifications.dart';
+
+/// Runs in a background isolate while the app is closed or the screen is off.
+/// Notification messages are drawn by the system; data-only task offers are drawn here
+/// so the task_offers channel can use a full-screen intent that wakes the screen.
+@pragma('vm:entry-point')
+Future<void> firebaseBackgroundMessage(RemoteMessage message) async {
+  if (message.notification != null) return;
+  final payload = FirebasePushMessaging._payload(message);
+  if (payload == null) return;
+  final notifier = LocalDeviceNotifier();
+  await notifier.init((_) {});
+  final channel = NotifyChannel.values.where((c) => c.id == payload.channelId).firstOrNull ?? NotifyChannel.taskUpdates;
+  await notifier.show(
+    id: NotificationRelay.idFor(payload.notificationId),
+    channel: channel,
+    title: payload.title,
+    body: payload.body,
+    route: payload.route,
+  );
+}
 
 /// Firebase client values are injected at build time. They identify the Firebase
 /// app but must still be supplied per environment; no project config is committed.
@@ -46,6 +67,7 @@ Future<PushMessaging> createFirebasePushMessaging([
   if (!config.configured || kIsWeb) return const NoopPushMessaging();
   try {
     await Firebase.initializeApp(options: config.options);
+    FirebaseMessaging.onBackgroundMessage(firebaseBackgroundMessage);
     return FirebasePushMessaging(FirebaseMessaging.instance);
   } catch (error) {
     debugPrint('Firebase messaging unavailable: ${error.runtimeType}');
