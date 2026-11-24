@@ -221,7 +221,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_details ? (_managerHelp ? 'Ask Manager for cover' : 'Swap request') : 'Choose a colleague'),
-        leading: _details ? BackButton(onPressed: () => setState(() { _details = false; _managerHelp = false; })) : null,
+        leading: _details && !_managerHelp ? BackButton(onPressed: () => setState(() => _details = false)) : null,
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -242,18 +242,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
         InfoBanner(tone: BannerTone.info, icon: Icons.history, title: ended),
       ],
       const _Label('Type'),
-      Wrap(spacing: 8, children: [
-        for (final t in SwapType.values)
-          ChoiceChip(
-            label: Text(t.label),
-            selected: _type == t,
-            onSelected: (_) => setState(() {
-              _type = t;
-              _picked = null;
-              _managerHelp = false;
-            }),
-          ),
-      ]),
+      _typeTabs(),
       _Label('Eligible colleagues · ${widget.shift.zoneName}'),
       ...candidates.when(
         loading: () => [const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))],
@@ -314,12 +303,6 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
         child: Text(_picked == null ? 'Choose a colleague' : 'Choose ${_picked!.fullName}'),
       ),
       const SizedBox(height: 10),
-      OutlinedButton.icon(
-        onPressed: () => setState(() { _managerHelp = true; _picked = null; _type = SwapType.cover; _details = true; }),
-        icon: const Icon(Icons.support_agent),
-        label: const Text('Ask Manager to assign cover'),
-      ),
-      const SizedBox(height: 10),
       OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Back to my shifts')),
     ];
   }
@@ -330,6 +313,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
     final theirs = picked?.shift;
     return [
       mine,
+      if (_managerHelp) ...[const _Label('Type'), _typeTabs()],
       _Label(_managerHelp ? 'Who decides' : theirs == null ? 'Covered by' : 'In exchange'),
       if (_managerHelp)
         AppCard(
@@ -384,9 +368,39 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
       const SizedBox(height: 18),
       FilledButton(onPressed: _sending ? null : _send, child: Text(_sending ? 'Sending…' : 'Send request')),
       const SizedBox(height: 10),
-      OutlinedButton(onPressed: _sending ? null : () => setState(() { _details = false; _managerHelp = false; }), child: const Text('Back')),
+      if (_managerHelp)
+        OutlinedButton(onPressed: _sending ? null : () => context.go('/shifts'), child: const Text('Back to my shifts'))
+      else
+        OutlinedButton(onPressed: _sending ? null : () => setState(() => _details = false), child: const Text('Back')),
     ];
   }
+
+  /// Swap shifts and Regular cover pick a colleague first; Ask Manager for cover opens its form directly.
+  Widget _typeTabs() => Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final t in SwapType.values)
+          ChoiceChip(
+            label: Text(t == SwapType.swap ? 'Swap shifts' : 'Regular cover'),
+            selected: !_managerHelp && _type == t,
+            onSelected: (_) => setState(() {
+              _type = t;
+              _picked = null;
+              _managerHelp = false;
+              _details = false;
+              _error = null;
+            }),
+          ),
+        ChoiceChip(
+          label: const Text('Ask Manager for cover'),
+          selected: _managerHelp,
+          onSelected: (_) => setState(() {
+            _type = SwapType.cover;
+            _picked = null;
+            _managerHelp = true;
+            _details = true;
+            _error = null;
+          }),
+        ),
+      ]);
 }
 
 String _hours(double h) => h == h.roundToDouble() ? '${h.toInt()}' : h.toStringAsFixed(1);
