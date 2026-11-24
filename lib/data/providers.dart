@@ -77,32 +77,21 @@ final unreadCountProvider = Provider<int>(
   (ref) => ref.watch(notificationsProvider).valueOrNull?.where((n) => !n.read).length ?? 0,
 );
 
-/// Select the shift that should drive today's staff actions.
-///
-/// A staff member can have more than one non-overlapping shift on the same day.
-/// Prefer the shift they are currently checked in to, then a shift in progress,
-/// then the next shift whose check-in window is open, and finally the next
-/// upcoming shift. An ended shift must not hide a later shift's check-in action.
+/// Prefer an active checked-in shift, then any active shift or open check-in
+/// window, including shifts that start on a different calendar date.
 Shift? primaryShiftForToday(Iterable<Shift> shifts, DateTime now) {
-  final today = shifts.where((s) => s.isTodayAt(now)).toList()..sort((a, b) => a.start.compareTo(b.start));
-  if (today.isEmpty) return null;
-
-  final remaining = today.where((s) => now.isBefore(s.end)).toList();
-  if (remaining.isEmpty) return today.last;
-
-  for (final shift in remaining) {
-    if (shift.isCheckedIn && shift.isActiveAt(now)) return shift;
-  }
-  for (final shift in remaining) {
-    if (shift.isActiveAt(now)) return shift;
-  }
-  for (final shift in remaining) {
-    if (!now.isBefore(shift.checkInOpensAt)) return shift;
-  }
-  return remaining.first;
+  final ordered = shifts.toList()..sort((a, b) => a.start.compareTo(b.start));
+  final remaining = ordered.where((s) => now.isBefore(s.end));
+  final active = remaining.where((s) => s.isActiveAt(now));
+  final today = ordered.where((s) => s.isTodayAt(now));
+  return active.where((s) => s.isCheckedIn).firstOrNull ??
+      active.firstOrNull ??
+      remaining.where((s) => !now.isBefore(s.checkInOpensAt)).firstOrNull ??
+      today.where((s) => now.isBefore(s.end)).firstOrNull ??
+      today.lastOrNull;
 }
 
-/// Today's primary shift, if the staff member has one.
+/// The shift selected for check-in and other staff actions.
 final todayShiftProvider = Provider<Shift?>((ref) {
   final now = ref.watch(clockProvider)();
   final shifts = ref.watch(shiftsProvider).valueOrNull ?? const [];

@@ -191,8 +191,9 @@ class HttpOperationsRepository implements OperationsRepository {
   Future<List<Shift>> _loadShifts() async {
     final now = clock();
     final today = DateTime(now.year, now.month, now.day);
-    // From Monday, so the week strip shows earlier days of this week, to two weeks ahead.
-    final from = today.subtract(Duration(days: now.weekday - 1));
+    // Include the previous Sunday on Mondays for shifts still running after midnight.
+    final daysBack = now.weekday == DateTime.monday ? 1 : now.weekday - 1;
+    final from = today.subtract(Duration(days: daysBack));
     final data = await _get('/api/me/shifts', {'from': _date(from), 'to': _date(today.add(const Duration(days: 14)))});
     // A shift the Manager cancelled cannot be checked into or swapped; its notification says so.
     return [

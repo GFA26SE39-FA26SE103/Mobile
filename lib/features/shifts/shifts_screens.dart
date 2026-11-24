@@ -184,12 +184,18 @@ class _TodayCard extends StatelessWidget {
     final c = context.colors;
     final theme = Theme.of(context).textTheme;
     final ended = !now.isBefore(shift.end);
+    final day = dayShort(shift.start);
+    final dateLabel = shift.isTodayAt(now)
+        ? 'Today · $day'
+        : shift.start.isBefore(now)
+            ? 'Overnight shift · $day'
+            : 'Upcoming shift · $day';
     return AppCard(
       borderColor: shift.isCheckedIn ? c.success : c.primary,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Expanded(
-            child: Text('Today · ${dayShort(shift.start)}',
+            child: Text(dateLabel,
                 style: TextStyle(color: c.primary, fontWeight: FontWeight.w700, fontSize: 12.5)),
           ),
           shift.isCheckedIn

@@ -162,7 +162,7 @@ Map<String, Object?> swapJson({String status = 'PENDING_PEER', String viewerRole
   };
 }
 
-({HttpOperationsRepository repo, FakeApi api}) build() {
+({HttpOperationsRepository repo, FakeApi api}) build({DateTime? currentTime}) {
   final api = FakeApi()
     ..on('GET /api/me/shifts', (_) => [shiftJson()])
     ..on('GET /api/me/eligibility', (_) => {
@@ -192,7 +192,7 @@ Map<String, Object?> swapJson({String status = 'PENDING_PEER', String viewerRole
         ])
     ..on('GET /api/me/swap-requests', (_) => [swapJson()]);
   final dio = Dio(BaseOptions(baseUrl: 'http://api.test'))..httpClientAdapter = api;
-  final repo = HttpOperationsRepository(dio, clock: () => now, poll: false);
+  final repo = HttpOperationsRepository(dio, clock: () => currentTime ?? now, poll: false);
   addTearDown(repo.dispose);
   return (repo: repo, api: api);
 }
@@ -379,6 +379,16 @@ void main() {
     api.on('GET /api/me/shifts', (_) => [shiftJson()..['startsAt'] = startUtc.toIso8601String().replaceAll('Z', '')]);
     await repo.refresh();
     expect((await repo.watchShifts().first).single.start.toUtc(), startUtc);
+  });
+
+  test('includes Sunday assignments when loading shifts early on Monday', () async {
+    final monday = DateTime(2026, 11, 30, 0, 9);
+    final (:repo, :api) = build(currentTime: monday);
+    api.on('GET /api/me/shifts', (_) => []);
+
+    await repo.refresh();
+
+    expect(api.calls.firstWhere((c) => c.path == '/api/me/shifts').queryParameters['from'], '2026-11-29');
   });
 
   test('an open offer is delivered once, and again when it is re-offered', () async {
