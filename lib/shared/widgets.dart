@@ -179,10 +179,10 @@ class FactLine extends StatelessWidget {
 }
 
 class EmptyState extends StatelessWidget {
-  const EmptyState({super.key, required this.icon, required this.title, required this.body, this.action});
+  const EmptyState({super.key, required this.icon, required this.title, this.body, this.action});
   final IconData icon;
   final String title;
-  final String body;
+  final String? body;
   final Widget? action;
 
   @override
@@ -199,8 +199,10 @@ class EmptyState extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Text(title, textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 6),
-        Text(body, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+        if (body != null) ...[
+          const SizedBox(height: 6),
+          Text(body!, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+        ],
         if (action != null) ...[const SizedBox(height: 16), action!],
       ]),
     );
