@@ -32,8 +32,7 @@ class AlertsScreen extends ConsumerWidget {
           InfoBanner(
             tone: BannerTone.warning,
             icon: Icons.notifications_off_outlined,
-            title: "You're not receiving task offers",
-            body: 'Task offers only reach staff who are checked in to their shift.',
+            title: "You're not checked in",
             action: TextButton(
               style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 36)),
               onPressed: () => context.go('/shifts'),

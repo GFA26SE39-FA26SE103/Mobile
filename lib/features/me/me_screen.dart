@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/config.dart';
 import '../../core/providers.dart';
 import '../../core/push_notifications.dart';
 import '../../core/theme/app_colors.dart';
@@ -48,7 +47,7 @@ class MeScreen extends ConsumerWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Expanded(child: Text('Today', style: theme.titleMedium)),
-              ShiftStatusPill(onShift: shift?.isCheckedIn ?? false),
+              if (shift?.isCheckedIn == true) const ShiftStatusPill(onShift: true),
             ]),
             const SizedBox(height: 6),
             Text(
@@ -141,24 +140,19 @@ class MeScreen extends ConsumerWidget {
         AppCard(
           padding: EdgeInsets.zero,
           child: Column(children: [
-            ListTile(
-              leading: Icon(Icons.dns_outlined, color: c.textMuted),
-              title: const Text('Server'),
-              subtitle: Text(AppConfig.mockAuth
-                  ? 'Demo sign-in (no server)'
-                  : '${AppConfig.apiUrl}${AppConfig.demoOperations ? ' · shifts and tasks on demo data' : ''}'),
-            ),
-            Divider(height: 1, color: c.border),
             ValueListenableBuilder<PushStatus>(
               valueListenable: ref.watch(pushRegistrationProvider).status,
-              builder: (context, status, _) => ListTile(
-                leading: Icon(
-                  status == PushStatus.registered ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
-                  color: status == PushStatus.registered ? c.success : c.textMuted,
-                ),
-                title: const Text('Push notifications'),
-                subtitle: Text(status.label),
-              ),
+              builder: (context, status, _) {
+                final enabled = status == PushStatus.registered;
+                return ListTile(
+                  leading: Icon(
+                    enabled ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                    color: enabled ? c.success : c.textMuted,
+                  ),
+                  title: const Text('Push notifications'),
+                  trailing: Text(enabled ? 'ON' : 'OFF'),
+                );
+              },
             ),
             Divider(height: 1, color: c.border),
             ListTile(

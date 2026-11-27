@@ -13,7 +13,6 @@ import '../../data/providers.dart';
 import '../../shared/format.dart';
 import '../../shared/widgets.dart';
 import 'voice_input.dart';
-import 'recorded_voice_input.dart';
 
 /// The draft being confirmed; lives outside the routes so it survives navigation.
 final reportDraftProvider = StateProvider<ReportDraft?>((ref) => null);
@@ -41,10 +40,6 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
   bool _extracting = false;
   bool _listening = false;
   bool _usedVoice = false;
-  bool _recording = false;
-  bool _recordingBusy = false;
-  String? _voicePath;
-  Timer? _recordingLimit;
   String _beforeVoice = '';
   String? _error;
 
@@ -56,43 +51,12 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
 
   @override
   void dispose() {
-    _recordingLimit?.cancel();
-    if (_recording) unawaited(ref.read(reportAudioRecorderProvider).cancel());
     if (_listening) ref.read(voiceInputProvider).stop();
     _note.dispose();
     super.dispose();
   }
 
-  bool get _ready => _note.text.trim().length >= 5 || _photos.isNotEmpty || _voicePath != null;
-
-  Future<void> _toggleRecording() async {
-    if (_recordingBusy) return;
-    setState(() => _recordingBusy = true);
-    final recorder = ref.read(reportAudioRecorderProvider);
-    try {
-      if (_recording) {
-        _recordingLimit?.cancel();
-        final path = await recorder.stop();
-        if (mounted) setState(() { _recording = false; _voicePath = path; _usedVoice = path != null; });
-        return;
-      }
-      if (_listening) {
-        await ref.read(voiceInputProvider).stop();
-        if (mounted) setState(() => _listening = false);
-      }
-      final previous = _voicePath;
-      final started = await recorder.start();
-      if (!mounted) { if (started) await recorder.cancel(); return; }
-      if (!started) { setState(() => _error = 'Allow microphone access to record a voice note.'); return; }
-      if (previous != null) unawaited(File(previous).delete().catchError((Object _) => File(previous)));
-      setState(() { _recording = true; _voicePath = null; _error = null; });
-      _recordingLimit = Timer(const Duration(seconds: 60), () { if (mounted && _recording) _toggleRecording(); });
-    } catch (_) {
-      if (mounted) setState(() { _recording = false; _error = 'Could not record the voice note. Try again or type the report.'; });
-    } finally {
-      if (mounted) setState(() => _recordingBusy = false);
-    }
-  }
+  bool get _ready => _note.text.trim().length >= 5 || _photos.isNotEmpty;
 
   Future<void> _addPhoto(ImageSource source) async {
     try {
@@ -104,11 +68,6 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
   }
 
   Future<void> _toggleVoice() async {
-    if (_recordingBusy) return;
-    if (_recording) {
-      await _toggleRecording();
-      if (_recording || _voicePath == null) return;
-    }
     final voice = ref.read(voiceInputProvider);
     if (_listening) {
       await voice.stop();
@@ -144,17 +103,12 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
 
   Future<void> _extract() async {
     if (_listening) await _toggleVoice();
-    if (_recordingBusy) return;
-    if (_recording) {
-      await _toggleRecording();
-      if (_voicePath == null) return;
-    }
     setState(() {
       _extracting = true;
       _error = null;
     });
     try {
-      final draft = (await ref.read(operationsRepositoryProvider).extractReport(_note.text, List.of(_photos), fromVoice: _usedVoice, voicePath: _voicePath))
+      final draft = (await ref.read(operationsRepositoryProvider).extractReport(_note.text, List.of(_photos), fromVoice: _usedVoice))
           .defaultZoneFromShift(ref.read(todayShiftProvider));
       ref.read(reportDraftProvider.notifier).state = draft;
       if (mounted) context.go('/report/review');
@@ -176,7 +130,6 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
       if (next != null && next != previous) {
         _note.clear();
         _usedVoice = false;
-        _voicePath = null;
         setState(_photos.clear);
       }
     });
@@ -185,7 +138,7 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 18, 16, 16), children: [
         Text('What happened?', style: theme.titleLarge),
         const SizedBox(height: 4),
-        Text('Type, speak or add a photo. Draft input goes to AI; you review the suggestion before submitting a report.', style: theme.bodySmall),
+        Text('Type, speak or add a photo.', style: theme.bodySmall),
         const SizedBox(height: 14),
         TextField(
           controller: _note,
@@ -203,9 +156,6 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
             active: _listening,
             onTap: _toggleVoice,
           ),
-          _AddTile(icon: _recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record,
-            label: _recording ? 'Stop recording' : _voicePath == null ? 'Record note' : 'Record again',
-            active: _recording, onTap: _toggleRecording),
           for (var i = 0; i < _photos.length; i++) _PhotoThumb(path: _photos[i], onRemove: () => setState(() => _photos.removeAt(i))),
           if (_photos.length < _maxPhotos) ...[
             _AddTile(icon: Icons.photo_camera_outlined, label: 'Take photo', onTap: () => _addPhoto(ImageSource.camera)),
@@ -220,7 +170,6 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
             tone: BannerTone.warning,
             icon: Icons.place_outlined,
             title: 'You are not checked in',
-            body: 'You can still report. Add the location yourself on the next screen.',
           ),
         if (_error != null) ...[
           const SizedBox(height: 12),
@@ -234,13 +183,6 @@ class _ReportDescribeScreenState extends ConsumerState<ReportDescribeScreen> {
               : const Icon(Icons.auto_awesome),
           label: Text(_extracting ? 'Reading your report…' : 'Let AI fill the report'),
         ),
-        const SizedBox(height: 10),
-        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(Icons.lock_outline, size: 14, color: c.textDim),
-          const SizedBox(width: 4),
-          Flexible(child: Text('No Incident or Task is created until you confirm. Draft input is sent for AI analysis.',
-              style: theme.bodySmall?.copyWith(color: c.textDim))),
-        ]),
       ]),
     );
   }

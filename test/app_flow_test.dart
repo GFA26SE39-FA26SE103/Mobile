@@ -3,12 +3,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supermarket_staff/core/providers.dart';
+import 'package:supermarket_staff/core/push_notifications.dart';
 import 'package:supermarket_staff/core/theme/app_colors.dart';
 import 'package:supermarket_staff/core/theme/app_theme.dart';
 import 'package:supermarket_staff/data/models.dart';
 import 'package:supermarket_staff/data/providers.dart';
 import 'package:supermarket_staff/features/auth/auth_repository.dart';
-import 'package:supermarket_staff/features/report/recorded_voice_input.dart';
+import 'package:supermarket_staff/features/report/report_screens.dart';
+import 'package:supermarket_staff/features/report/voice_input.dart';
 import 'package:supermarket_staff/features/tasks/tasks_screens.dart';
 
 import 'helpers.dart';
@@ -24,21 +27,24 @@ Future<void> checkIn(WidgetTester tester) async {
   await settle(tester);
 }
 
-class _FakeReportRecorder implements ReportAudioRecorder {
-  int starts = 0;
-  bool failStop = false;
+class _FakeVoiceInput implements VoiceInput {
+  const _FakeVoiceInput(this.transcript);
+
+  final String? transcript;
 
   @override
-  Future<bool> start() async { starts++; return true; }
-  @override
-  Future<String?> stop() async {
-    if (failStop) throw StateError('microphone stopped');
-    return '.dart_tool/test-voice.m4a';
+  Future<bool> start(
+    void Function(String words, bool isFinal) onText, {
+    void Function()? onDone,
+  }) async {
+    if (transcript == null) return false;
+    onText(transcript!, true);
+    onDone?.call();
+    return true;
   }
+
   @override
-  Future<void> cancel() async {}
-  @override
-  Future<void> dispose() async {}
+  Future<void> stop() async {}
 }
 
 void main() {
@@ -82,33 +88,38 @@ void main() {
     expect(find.widgetWithText(AppBar, 'Report photo 1'), findsOneWidget);
   });
 
-  final recorder = _FakeReportRecorder();
-  appTest('report voice recording enables review only after a successful stop', (tester, app) async {
+  appTest('report dictation fills the note and opens review', (tester, app) async {
     await goTab(tester, 'Report');
+    expect(text('Type, speak or add a photo.'), findsOneWidget);
+    expect(text('Record note'), findsNothing);
+    expect(text('Take photo'), findsOneWidget);
+    expect(text('From gallery'), findsOneWidget);
+    expect(text('You are not checked in'), findsOneWidget);
+    expect(text('You can still report. Add the location yourself on the next screen.'), findsNothing);
+    expect(find.textContaining('No Incident or Task is created until you confirm'), findsNothing);
     final aiButton = find.widgetWithText(FilledButton, 'Let AI fill the report');
     expect(tester.widget<FilledButton>(aiButton).onPressed, isNull);
-    await tester.tap(text('Record note'));
+    await tester.tap(text('Speak'));
     await settle(tester);
-    expect(recorder.starts, 1);
-    expect(text('Stop recording'), findsOneWidget);
-    expect(tester.widget<FilledButton>(aiButton).onPressed, isNull);
-    await tester.tap(text('Stop recording'));
-    await settle(tester);
-    expect(text('Record again'), findsOneWidget);
+    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'Broken bottle in aisle 4');
     expect(tester.widget<FilledButton>(aiButton).onPressed, isNotNull);
-  }, audioRecorder: recorder);
+    await tapVisible(tester, aiButton);
+    await settle(tester);
+    expect(find.widgetWithText(AppBar, 'Review report'), findsOneWidget);
+    final draft = app.container.read(reportDraftProvider);
+    expect(draft?.fromVoice, isTrue);
+    expect(draft?.note, 'Broken bottle in aisle 4');
+  }, voiceInput: const _FakeVoiceInput('Broken bottle in aisle 4'));
 
-  final failingRecorder = _FakeReportRecorder()..failStop = true;
-  appTest('failed voice stop keeps the report unready and shows an error', (tester, app) async {
+  appTest('unavailable dictation keeps the report unready and shows an error', (tester, app) async {
     await goTab(tester, 'Report');
-    await tester.tap(text('Record note'));
+    await tester.tap(text('Speak'));
     await settle(tester);
-    await tester.tap(text('Stop recording'));
-    await settle(tester);
-    expect(text('Could not record the voice note. Try again or type the report.'), findsOneWidget);
-    await tester.scrollUntilVisible(text('Let AI fill the report'), 150, scrollable: find.byType(Scrollable).first);
-    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Let AI fill the report')).onPressed, isNull);
-  }, audioRecorder: failingRecorder);
+    expect(text('Voice input is not available. Allow microphone access, or type the report instead.'), findsOneWidget);
+    final aiButton = find.widgetWithText(FilledButton, 'Let AI fill the report');
+    await tester.scrollUntilVisible(aiButton, 150, scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<FilledButton>(aiButton).onPressed, isNull);
+  }, voiceInput: const _FakeVoiceInput(null));
   appTest('sign-in validates input, then lands a staff member on My tasks', signedIn: false, (tester, app) async {
     expect(text('Welcome back'), findsOneWidget);
 
@@ -128,6 +139,54 @@ void main() {
     expect(text('Off shift'), findsOneWidget);
   });
 
+  testWidgets('empty task tabs keep their titles and the check-in action', (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        tasksProvider.overrideWith((ref) => Stream.value(const <StaffTask>[])),
+        openOffersProvider.overrideWith((ref) => Stream.value(const <TaskOffer>[])),
+        eligibilityProvider.overrideWith(
+          (ref) => Stream.value(const Eligibility(checkedIn: false, activeTasks: 0)),
+        ),
+      ],
+      child: MaterialApp(
+        theme: buildTheme(AppColors.light, Brightness.light),
+        home: const MyTasksScreen(),
+      ),
+    ));
+    await settle(tester);
+    expect(text('No accepted tasks'), findsOneWidget);
+    expect(text('Go to my shifts'), findsOneWidget);
+    expect(text('Check in to your shift to start receiving task offers for your zone.'), findsNothing);
+
+    await tester.tap(text('In progress · 0'));
+    await settle(tester);
+    expect(text('Nothing in progress'), findsOneWidget);
+    expect(text('Tasks you handle now or start later appear here.'), findsNothing);
+
+    await tester.tap(text('Finished'));
+    await settle(tester);
+    expect(text('No finished tasks yet'), findsOneWidget);
+    expect(text('Submitted tasks wait here for the Operator to verify them.'), findsNothing);
+  });
+
+  appTest('Me shows ON only while push is registered', (tester, app) async {
+    await goTab(tester, 'Me');
+    expect(text('Today'), findsOneWidget);
+    expect(text('Off shift'), findsNothing);
+    final pushTile = find.widgetWithText(ListTile, 'Push notifications');
+    await tester.scrollUntilVisible(pushTile, 200, scrollable: find.byType(Scrollable).first);
+    expect(text('Server'), findsNothing);
+
+    final status = app.container.read(pushRegistrationProvider).status;
+    for (final state in PushStatus.values) {
+      status.value = state;
+      await tester.pump();
+      expect(tester.widget<ListTile>(pushTile).subtitle, isNull);
+      expect((tester.widget<ListTile>(pushTile).trailing as Text).data,
+          state == PushStatus.registered ? 'ON' : 'OFF');
+    }
+  });
+
   appTest('a manager account sees why it cannot use the staff app', signedIn: false, (tester, app) async {
     await tester.enterText(find.byType(TextFormField).at(0), 'manager@store.test');
     await tester.enterText(find.byType(TextFormField).at(1), MockAuthRepository.password);
@@ -139,9 +198,13 @@ void main() {
 
   appTest('check in → event task offer → Handle now → the task is in progress', (tester, app) async {
     await goTab(tester, 'Alerts');
-    expect(text("You're not receiving task offers"), findsOneWidget);
+    expect(text("You're not checked in"), findsOneWidget);
+    expect(text('Task offers only reach staff who are checked in to their shift.'), findsNothing);
 
-    await checkIn(tester);
+    await tester.tap(find.widgetWithText(TextButton, 'Check in'));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(FilledButton, 'Check in'));
+    await settle(tester);
     expect(text("You're checked in"), findsOneWidget);
 
     app.repo.simulateEventTask();

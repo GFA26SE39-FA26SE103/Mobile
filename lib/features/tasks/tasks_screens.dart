@@ -97,9 +97,6 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
         _Tab.accepted => EmptyState(
             icon: Icons.inbox_outlined,
             title: 'No accepted tasks',
-            body: e?.checkedIn ?? false
-                ? 'Task offers for ${e!.zoneName} appear as they come in. Tasks you accept for later wait here.'
-                : 'Check in to your shift to start receiving task offers for your zone.',
             action: e?.checkedIn ?? false
                 ? null
                 : OutlinedButton(onPressed: () => context.go('/shifts'), child: const Text('Go to my shifts')),
@@ -107,12 +104,10 @@ class _MyTasksScreenState extends ConsumerState<MyTasksScreen> {
         _Tab.inProgress => const EmptyState(
             icon: Icons.play_circle_outline,
             title: 'Nothing in progress',
-            body: 'Tasks you handle now or start later appear here.',
           ),
         _Tab.finished => const EmptyState(
             icon: Icons.task_alt,
             title: 'No finished tasks yet',
-            body: 'Submitted tasks wait here for the Operator to verify them.',
           ),
       };
 }
