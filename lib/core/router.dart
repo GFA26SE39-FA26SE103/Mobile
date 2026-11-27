@@ -102,6 +102,7 @@ final routerProvider = Provider<GoRouter>((ref) {
                   routes: [GoRoute(path: ':requestId', builder: (_, s) => SwapDetailScreen(requestId: s.pathParameters['requestId']!))],
                 ),
                 GoRoute(path: ':shiftId/swap', builder: (_, s) => SwapRequestScreen(shiftId: s.pathParameters['shiftId']!)),
+                GoRoute(path: ':shiftId', builder: (_, s) => ShiftDetailScreen(shiftId: s.pathParameters['shiftId']!)),
               ],
             ),
           ]),

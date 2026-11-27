@@ -17,6 +17,15 @@ String _caption(String lead, DateTime start, String label) => '$lead · ${daySho
 
 String _when(DateTime t) => '${dayShort(t)}, ${hm(t)}';
 
+/// "2 d 4 h", "3 h 10 min", "12 min" until [t].
+String _left(DateTime t, DateTime now) {
+  final d = t.difference(now);
+  if (d.isNegative) return '0 min';
+  if (d.inDays > 0) return '${d.inDays} d ${d.inHours % 24} h';
+  if (d.inHours > 0) return '${d.inHours} h ${d.inMinutes % 60} min';
+  return '${d.inMinutes} min';
+}
+
 /// "YOUR SHIFT · FRI 25 · EVENING" over "14:00–22:00 · Zone B".
 class _ShiftCard extends StatelessWidget {
   const _ShiftCard({required this.caption, required this.start, required this.end, required this.zoneName, this.footnote});
@@ -75,7 +84,11 @@ String? _endedNote(ShiftSwapRequest r) => switch (r.status) {
       SwapStatus.declinedByPeer => '${r.otherName} declined your last request.',
       SwapStatus.rejected => 'The Manager rejected your last request${r.decisionNote == null ? '.' : ': ${r.decisionNote}'}',
       SwapStatus.expired => 'Your last request expired before it was decided.',
-      SwapStatus.cancelled => 'Your last request was cancelled${r.cancelledBy == null ? '' : ' by ${r.cancelledBy}'}.',
+      SwapStatus.cancelled => (r.cancellationReason ?? '').startsWith('Manager direct')
+          ? 'The Manager replaced your last request.'
+          : r.cancelledBy == null || r.cancelledBy == r.requesterName
+              ? 'You cancelled your last request.'
+              : '${r.cancelledBy} withdrew from your last request.',
       _ => null,
     };
 
@@ -149,6 +162,7 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
   SwapReason? _reason;
   bool _managerHelp = false;
   bool _sending = false;
+  bool _rulesOpen = false;
   String? _error;
 
   @override
@@ -281,18 +295,39 @@ class _ChooseColleagueState extends ConsumerState<_ChooseColleague> {
               const SizedBox(height: 10),
             ],
           const SizedBox(height: 2),
+          // The eligibility rules fold away under their heading; tap it to read them.
           AppCard(
             color: c.primaryTint,
             borderColor: c.primaryTint,
+            padding: EdgeInsets.zero,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Only eligible colleagues are listed', style: TextStyle(color: c.primary, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 2),
-              Text(
-                'Free at both shift times, at or below the 48 h hard limit and not on leave. Up to 40 h is recommended.'
-                '${data.hiddenCount > 0 ? ' ${data.hiddenCount} colleague${data.hiddenCount == 1 ? ' is' : 's are'} hidden.' : ''}'
-                ' The request must be decided by ${_when(data.deadline)}, or you keep this shift.',
-                style: theme.bodySmall,
+              Semantics(
+                button: true,
+                label: _rulesOpen ? 'Hide eligibility rules' : 'Show eligibility rules',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => setState(() => _rulesOpen = !_rulesOpen),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                    child: Row(children: [
+                      Expanded(
+                        child: Text('Only eligible colleagues are listed', style: TextStyle(color: c.primary, fontWeight: FontWeight.w600)),
+                      ),
+                      Icon(_rulesOpen ? Icons.expand_less : Icons.expand_more, color: c.primary),
+                    ]),
+                  ),
+                ),
               ),
+              if (_rulesOpen)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    'Free at both shift times, at or below the 48 h hard limit and not on leave. Up to 40 h is recommended.'
+                    '${data.hiddenCount > 0 ? ' ${data.hiddenCount} colleague${data.hiddenCount == 1 ? ' is' : 's are'} hidden.' : ''}'
+                    ' The request must be decided by ${_when(data.deadline)}, or you keep this shift.',
+                    style: theme.bodySmall,
+                  ),
+                ),
             ]),
           ),
         ],
@@ -516,19 +551,7 @@ class _SwapProgressViewState extends ConsumerState<SwapProgressView> {
       _ProgressCard(request: r),
       if (r.status.isOpen && deadline != null) ...[
         const SizedBox(height: 12),
-        AppCard(
-          color: c.primaryTint,
-          borderColor: c.primaryTint,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(r.managerNeedsToAssign
-                ? 'The Manager will assign cover directly'
-                : r.canRespond ? 'After you accept, the Manager approves' : 'Keep this shift until it is approved',
-                style: TextStyle(color: c.primary, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text('Shifts change only after approval. Not decided by ${_when(deadline)}: the request expires and the schedule stays as it is.',
-                style: theme.bodySmall),
-          ]),
-        ),
+        FactLine(icon: Icons.timer_outlined, text: 'Request expires in ${_left(deadline, ref.watch(clockProvider)())} · ${_when(deadline)}'),
       ],
       if (_error != null) ...[
         const SizedBox(height: 12),

@@ -102,11 +102,21 @@ final todayShiftProvider = Provider<Shift?>((ref) {
 final swapByShiftProvider = Provider<Map<String, ShiftSwapRequest>>((ref) {
   final requests = ref.watch(swapRequestsProvider).valueOrNull ?? const [];
   final map = <String, ShiftSwapRequest>{};
+  // Keep the newest request per shift whatever order the list arrives in, so an older
+  // cancelled request never hides the latest one (for example a colleague's decline).
   for (final r in requests) {
-    if (r.sentByMe) map.putIfAbsent(r.shiftId, () => r);
+    if (!r.sentByMe) continue;
+    final known = map[r.shiftId];
+    if (known == null || r.submittedAt.isAfter(known.submittedAt)) map[r.shiftId] = r;
   }
   return map;
 });
+
+/// Open requests colleagues sent me, by the shift of mine they would take.
+final incomingSwapByShiftProvider = Provider<Map<String, ShiftSwapRequest>>((ref) => {
+      for (final r in ref.watch(swapRequestsProvider).valueOrNull ?? const <ShiftSwapRequest>[])
+        if (!r.sentByMe && r.status.isOpen && r.targetShift != null) r.targetShift!.shiftId: r,
+    });
 
 /// Requests colleagues sent me that still wait for my answer.
 final swapsAwaitingMeProvider = Provider<int>(

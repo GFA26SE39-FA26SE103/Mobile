@@ -157,6 +157,10 @@ class LocalDeviceNotifier implements DeviceNotifier {
           channelDescription: channel.description,
           importance: channel.importance,
           priority: urgent ? Priority.max : Priority.defaultPriority,
+          // Stamp the notification with the time it is shown; without an explicit time some
+          // Android builds show the epoch ("57y") next to it.
+          when: DateTime.now().millisecondsSinceEpoch,
+          showWhen: true,
           // Task offers behave like an incoming call: wake the screen and show on the lock screen.
           fullScreenIntent: urgent,
           visibility: NotificationVisibility.public,

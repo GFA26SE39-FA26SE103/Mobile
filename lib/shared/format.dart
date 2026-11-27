@@ -1,7 +1,7 @@
 import 'package:intl/intl.dart';
 
 final _hm = DateFormat('HH:mm');
-final _dayShort = DateFormat('EEE d');
+final _dayShort = DateFormat('EEE, MMM d');
 final _dayLong = DateFormat('EEEE d MMM');
 
 String hm(DateTime t) => _hm.format(t.toLocal());

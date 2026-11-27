@@ -301,12 +301,22 @@ void main() {
 
   appTest('shift swap: pick a colleague, they accept, then the Manager approves', (tester, app) async {
     await goTab(tester, 'Shifts');
-    // The last evening row is days away, well before the 24-hour cut-off (today's card may say Evening too).
-    await tester.tap(find.textContaining('Evening ·').last);
+    // The last day with a shift is days away, well before the 24-hour cut-off.
+    await tapVisible(tester, find.byKey(const ValueKey('shift-day')).last);
+    await settle(tester);
+    await tapVisible(tester, find.textContaining('Evening ·').last);
+    await settle(tester);
+    expect(find.widgetWithText(AppBar, 'Shift detail'), findsOneWidget);
+    await tapVisible(tester, text('Swap shift'));
     await settle(tester);
     expect(find.widgetWithText(AppBar, 'Choose a colleague'), findsOneWidget);
 
     await tapVisible(tester, text('Hoàng Lan'));
+    await settle(tester);
+    // The eligibility rules are folded under their heading.
+    await tester.scrollUntilVisible(text('Only eligible colleagues are listed'), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.textContaining('colleague is hidden'), findsNothing);
+    await tapVisible(tester, text('Only eligible colleagues are listed'));
     await settle(tester);
     await tester.scrollUntilVisible(find.textContaining('colleague is hidden'), 200, scrollable: find.byType(Scrollable).first);
     expect(find.textContaining('colleague is hidden'), findsOneWidget);
